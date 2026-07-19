@@ -413,12 +413,12 @@ class UnlinkObject(bpy.types.Operator, tool.Ifc.Operator):
     skip_invoke: bpy.props.BoolProperty(default=False, options={"SKIP_SAVE"})
 
     def _execute(self, context):
+        objects: list[bpy.types.Object]
         if self.obj:
             objects = [bpy.data.objects.get(self.obj)]
         else:
             objects = context.selected_objects
 
-        objects: list[bpy.types.Object]
         for obj in objects:
             was_active_object = obj == context.active_object
 

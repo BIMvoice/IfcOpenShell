@@ -19,6 +19,7 @@ PyP6Xer
 pystache
 pytest
 python-dateutil
+python-igraph
 requests
 scikit-learn
 shapely
