@@ -228,10 +228,14 @@ class ReferenceUI:
             op.obj_type = self.data.obj_type
 
     def draw_add_file_ui(self, context: object) -> None:
+        row = self.layout.row(align=True)
+        row.prop(self.sprops, "builtin_classification_library", text="")
+        if self.sprops.builtin_classification_library == "0":
+            row.operator("bim.load_classification_library", text="", icon="IMPORT")
+
         if not self.data.data["active_classification_library"]:
             row = self.layout.row(align=True)
             row.label(text="No Active Classification Library", icon="ERROR")
-            row.operator("bim.load_classification_library", text="", icon="IMPORT")
             return
 
         row = self.layout.row(align=True)
