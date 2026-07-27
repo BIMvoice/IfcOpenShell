@@ -369,10 +369,19 @@ class IfcImporter:
             else:
                 self.spatial_elements = set(self.file.by_type("IfcSpatialElement"))
 
-        # Detect excessive voids
-        self.gross_elements = set(
-            filter(lambda e: len(getattr(e, "HasOpenings", [])) > self.ifc_import_settings.void_limit, self.elements)
-        )
+        # Detect excessive voids, and voids a Reference View exporter already
+        # baked into the host body.
+        void_limit = self.ifc_import_settings.void_limit
+        reference_view = self.ifc_import_settings.is_reference_view
+        self.gross_elements = set()
+        for element in self.elements:
+            openings = getattr(element, "HasOpenings", None) or ()
+            if not openings:
+                continue
+            if len(openings) > void_limit:
+                self.gross_elements.add(element)
+            elif reference_view and not self.has_subtractive_void(element):
+                self.gross_elements.add(element)
         self.elements = self.elements.difference(self.gross_elements)
 
         if self.gross_elements:
@@ -403,6 +412,20 @@ class IfcImporter:
             if self.is_native(element):
                 self.native_elements.add(element)
         self.elements -= self.native_elements
+
+    @staticmethod
+    def has_subtractive_void(element: ifcopenshell.entity_instance) -> bool:
+        """True when one of the element's openings still has to be subtracted.
+
+        A Reference View exporter writes the host body already cut and gives
+        the matching opening a Reference representation only. An opening
+        carrying a Body representation is one nothing has cut yet, which is
+        what every opening Bonsai authors looks like."""
+        for rel in getattr(element, "HasOpenings", None) or ():
+            definition = getattr(rel.RelatedOpeningElement, "Representation", None)
+            if definition and any(r.RepresentationIdentifier == "Body" for r in definition.Representations):
+                return True
+        return False
 
     def is_native(self, element: ifcopenshell.entity_instance) -> bool:
         if (
@@ -958,7 +981,7 @@ class IfcImporter:
         self.file = tool.Ifc.get()
         # IFC4 Reference View shall have no booleans https://github.com/BuildingSMART/IFC4-CV/issues/14
         if self.file.schema == "IFC4" and "ReferenceView" in str(self.file.header.file_description.description):
-            self.ifc_import_settings.void_limit = 0
+            self.ifc_import_settings.is_reference_view = True
 
     def calculate_unit_scale(self):
         self.unit_scale = ifcopenshell.util.unit.calculate_unit_scale(self.file)
@@ -1285,6 +1308,7 @@ class IfcImportSettings:
         self.deflection_tolerance = 0.05  # Default is 0.001, but I find this to be more practical
         self.angular_tolerance = 0.5
         self.void_limit = 30
+        self.is_reference_view = False
         self.style_limit = 300
         # Locations greater than 1km are not considered "small sites" according to the georeferencing guide
         # Users can configure this if they have to handle larger sites but beware of surveying precision
