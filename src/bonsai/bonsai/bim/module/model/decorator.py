@@ -1557,28 +1557,36 @@ class ProductDecorator(tool.Blender.ViewportDecorator):
             and snap_element.is_a("IfcWall")
         ):
             layers = tool.Model.get_material_layer_parameters(snap_element)
-            axes = tool.Model.get_wall_axis(snap_obj, layers=layers)
-            axis_base = axes["base"]
-            axis_side = axes["side"]
-            point_on_base_axis = tool.Cad.point_on_edge(mouse_point, axis_base)
-            point_on_side_axis = tool.Cad.point_on_edge(mouse_point, axis_side)
-            # Match FilledOpeningGenerator.generate: the filling faces the
-            # wall body from whichever face is snapped, so a NEGATIVE
-            # direction sense inverts which face needs the 180 degree turn.
-            flipped_wall = layers["direction_sense"] == "NEGATIVE"
-            if (point_on_base_axis - mouse_point).length_squared <= (point_on_side_axis - mouse_point).length_squared:
-                # mouse is snapped to the base axis
-                rotate_filling = flipped_wall
+            face_frame = None
+            if not tool.Model.has_layer2_reference_line(snap_element):
+                face_frame = tool.Model.get_wall_face_frame(snap_obj, mouse_point)
+            if face_frame is not None:
+                rot_mat = tool.Model.get_filling_rotation(face_frame[0])
             else:
-                # mouse is snapped to the side axis
-                rotate_filling = not flipped_wall
-            # rotation only: the ghost is positioned by translate_mouse, so
-            # carrying the wall's own translation would displace it
-            rot_quat = snap_obj.matrix_world.to_quaternion()
-            if rotate_filling:
-                # the preview is inverted, rotate it now and correct x position later
-                rot_quat = rot_quat @ Quaternion(Vector((0, 0, 1)), radians(180))
-            rot_mat = rot_quat.to_matrix().to_4x4()
+                axes = tool.Model.get_wall_axis(snap_obj, layers=layers)
+                axis_base = axes["base"]
+                axis_side = axes["side"]
+                point_on_base_axis = tool.Cad.point_on_edge(mouse_point, axis_base)
+                point_on_side_axis = tool.Cad.point_on_edge(mouse_point, axis_side)
+                # Match FilledOpeningGenerator.generate: the filling faces the
+                # wall body from whichever face is snapped, so a NEGATIVE
+                # direction sense inverts which face needs the 180 degree turn.
+                flipped_wall = layers["direction_sense"] == "NEGATIVE"
+                if (point_on_base_axis - mouse_point).length_squared <= (
+                    point_on_side_axis - mouse_point
+                ).length_squared:
+                    # mouse is snapped to the base axis
+                    rotate_filling = flipped_wall
+                else:
+                    # mouse is snapped to the side axis
+                    rotate_filling = not flipped_wall
+                # rotation only: the ghost is positioned by translate_mouse, so
+                # carrying the wall's own translation would displace it
+                rot_quat = snap_obj.matrix_world.to_quaternion()
+                if rotate_filling:
+                    # the preview is inverted, rotate it now and correct x position later
+                    rot_quat = rot_quat @ Quaternion(Vector((0, 0, 1)), radians(180))
+                rot_mat = rot_quat.to_matrix().to_4x4()
 
             mouse_point.z = snap_obj.matrix_world.translation.z
 

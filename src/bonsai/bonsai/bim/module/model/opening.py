@@ -249,6 +249,17 @@ def is_filling_supported(element) -> bool:
     return element is not None and element.is_a() in ("IfcDoor", "IfcWindow")
 
 
+def closest_point_on_host(obj: bpy.types.Object, target: Vector, distance: float) -> tuple[bool, Vector, Vector, int]:
+    """``Object.closest_point_on_mesh`` that reports a miss instead of raising.
+
+    Blender raises when the evaluated mesh carries no faces, which is what an
+    imported host whose body resolves to nothing at all hands us."""
+    try:
+        return obj.closest_point_on_mesh(obj.matrix_world.inverted() @ target, distance=distance)
+    except RuntimeError:
+        return (False, Vector(), Vector(), -1)
+
+
 class FilledOpeningGenerator:
     def generate(
         self,
@@ -286,10 +297,10 @@ class FilledOpeningGenerator:
 
         # Sometimes, the voided_obj may be an aggregate, which won't have any representation.
         if not preserve_placement and voided_obj.data:
-            raycast = voided_obj.closest_point_on_mesh(voided_obj.matrix_world.inverted() @ target, distance=0.01)
+            raycast = closest_point_on_host(voided_obj, target, 0.01)
             if not raycast[0]:
                 target = filling_obj.matrix_world.translation.copy()
-                raycast = voided_obj.closest_point_on_mesh(voided_obj.matrix_world.inverted() @ target, distance=0.5)
+                raycast = closest_point_on_host(voided_obj, target, 0.5)
                 if not raycast[0]:
                     return "TARGET is too far away from the voided object's mesh."
 
@@ -297,26 +308,35 @@ class FilledOpeningGenerator:
             layers = tool.Model.get_material_layer_parameters(element)
             if layers["layer_set_direction"] == "AXIS2":
                 opening_thickness_si = layers["thickness"] * 2
-                axes = tool.Model.get_wall_axis(voided_obj, layers=layers)
-                axis_base = axes["base"]
-                axis_side = axes["side"]
-                new_matrix = voided_obj.matrix_world.copy()
-                point_on_base_axis = tool.Cad.point_on_edge(target, axis_base)
-                point_on_side_axis = tool.Cad.point_on_edge(target, axis_side)
-                # The filling faces the wall body from whichever face was
-                # clicked, so a NEGATIVE direction sense (body on the wall's
-                # local -Y) inverts which face needs the 180 degree turn.
-                flipped_wall = layers["direction_sense"] == "NEGATIVE"
-                if (point_on_base_axis - target).length <= (point_on_side_axis - target).length:
-                    new_matrix.translation.x = point_on_base_axis.x
-                    new_matrix.translation.y = point_on_base_axis.y
-                    rotate_filling = flipped_wall
+                face_frame = None
+                if not tool.Model.has_layer2_reference_line(element):
+                    face_frame = tool.Model.get_wall_face_frame(voided_obj, target)
+                if face_frame is not None:
+                    inward, face_point = face_frame
+                    new_matrix = tool.Model.get_filling_rotation(inward)
+                    new_matrix.translation.x = face_point.x
+                    new_matrix.translation.y = face_point.y
                 else:
-                    new_matrix.translation.x = point_on_side_axis.x
-                    new_matrix.translation.y = point_on_side_axis.y
-                    rotate_filling = not flipped_wall
-                if rotate_filling:
-                    new_matrix = new_matrix @ Matrix.Rotation(radians(180.0), 4, "Z")
+                    axes = tool.Model.get_wall_axis(voided_obj, layers=layers)
+                    axis_base = axes["base"]
+                    axis_side = axes["side"]
+                    new_matrix = voided_obj.matrix_world.copy()
+                    point_on_base_axis = tool.Cad.point_on_edge(target, axis_base)
+                    point_on_side_axis = tool.Cad.point_on_edge(target, axis_side)
+                    # The filling faces the wall body from whichever face was
+                    # clicked, so a NEGATIVE direction sense (body on the wall's
+                    # local -Y) inverts which face needs the 180 degree turn.
+                    flipped_wall = layers["direction_sense"] == "NEGATIVE"
+                    if (point_on_base_axis - target).length <= (point_on_side_axis - target).length:
+                        new_matrix.translation.x = point_on_base_axis.x
+                        new_matrix.translation.y = point_on_base_axis.y
+                        rotate_filling = flipped_wall
+                    else:
+                        new_matrix.translation.x = point_on_side_axis.x
+                        new_matrix.translation.y = point_on_side_axis.y
+                        rotate_filling = not flipped_wall
+                    if rotate_filling:
+                        new_matrix = new_matrix @ Matrix.Rotation(radians(180.0), 4, "Z")
 
                 if should_set_z_level:
                     if filling.is_a("IfcDoor"):
@@ -354,7 +374,7 @@ class FilledOpeningGenerator:
         ifcopenshell.api.geometry.edit_object_placement(
             tool.Ifc.get(),
             product=opening,
-            matrix=np.array(filling_obj.matrix_world),
+            matrix=tool.Surveyor.get_absolute_matrix(filling_obj),
             is_si=True,
         )
 
@@ -657,7 +677,7 @@ class RecalculateFill(bpy.types.Operator, tool.Ifc.Operator):
             for opening in openings:
                 bonsai.core.geometry.edit_object_placement(tool.Ifc, tool.Geometry, tool.Surveyor, obj=obj)
                 ifcopenshell.api.geometry.edit_object_placement(
-                    tool.Ifc.get(), product=opening, matrix=obj.matrix_world
+                    tool.Ifc.get(), product=opening, matrix=tool.Surveyor.get_absolute_matrix(obj)
                 )
 
             decomposed_building_elements = set()
