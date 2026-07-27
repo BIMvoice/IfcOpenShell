@@ -133,9 +133,11 @@ class Root(bonsai.core.tool.Root):
                 new_map = ifcopenshell.util.element.copy(tool.Ifc.get(), rep_map)
 
                 # Handle the mapped representation - preserve mapping structure if present
-                if (source_rep.RepresentationType == 'MappedRepresentation' and
-                    len(source_rep.Items) == 1 and
-                    source_rep.Items[0].is_a("IfcMappedItem")):
+                if (
+                    source_rep.RepresentationType == "MappedRepresentation"
+                    and len(source_rep.Items) == 1
+                    and source_rep.Items[0].is_a("IfcMappedItem")
+                ):
                     # This is a mapped representation - preserve the structure
                     new_rep = ifcopenshell.util.element.copy(tool.Ifc.get(), source_rep)
                     new_rep.Items = [ifcopenshell.util.element.copy(tool.Ifc.get(), item) for item in source_rep.Items]
