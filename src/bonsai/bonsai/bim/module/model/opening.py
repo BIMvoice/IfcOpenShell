@@ -39,7 +39,7 @@ import numpy as np
 import shapely
 from bpy.types import Operator, SpaceView3D
 from gpu_extras.batch import batch_for_shader
-from mathutils import Euler, Matrix, Vector
+from mathutils import Matrix, Vector
 
 import bonsai.core.geometry
 import bonsai.tool as tool
@@ -421,8 +421,7 @@ class FilledOpeningGenerator:
             if voided_obj.data:
                 voided_element = tool.Ifc.get_entity(voided_obj)
                 assert voided_element
-                context = tool.Geometry.get_active_representation_context(voided_obj)
-                representation = tool.Geometry.get_representation_by_context(voided_element, context)
+                representation = tool.Geometry.get_host_representation_to_recut(voided_obj)
                 assert representation
 
                 tool.Geometry.recut_host(voided_obj, representation)
@@ -732,7 +731,6 @@ class FlipFill(bpy.types.Operator, tool.Ifc.Operator):
             tool.Geometry.flip_object(obj, "XY")
             ifcopenshell.api.geometry.edit_object_placement(tool.Ifc.get(), filled_opening, obj.matrix_world)
             tool.Geometry.reload_representation(filled_object)
-
 
         return {"FINISHED"}
 
