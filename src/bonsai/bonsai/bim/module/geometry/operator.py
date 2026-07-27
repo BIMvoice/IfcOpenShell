@@ -16,8 +16,6 @@
 # You should have received a copy of the GNU General Public License
 # along with Bonsai.  If not, see <http://www.gnu.org/licenses/>.
 
-import json
-import re
 from collections.abc import Sequence
 from time import time
 from typing import (
@@ -29,7 +27,6 @@ from typing import (
     assert_never,
     get_args,
 )
-
 
 import bmesh
 import bpy

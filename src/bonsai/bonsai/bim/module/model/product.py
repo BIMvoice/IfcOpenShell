@@ -22,8 +22,6 @@ import json
 import math
 from typing import TYPE_CHECKING, Any, Literal, get_args
 
-import numpy as np
-
 import bmesh
 import bpy
 import ifcopenshell
@@ -37,6 +35,7 @@ import ifcopenshell.util.shape_builder
 import ifcopenshell.util.system
 import ifcopenshell.util.type
 import ifcopenshell.util.unit
+import numpy as np
 from bpy_extras.object_utils import AddObjectHelper
 from mathutils import Matrix, Vector
 
@@ -50,8 +49,8 @@ import bonsai.tool as tool
 from bonsai.bim.helper import get_enum_items
 from bonsai.bim.ifc import IfcStore
 from bonsai.bim.module.model.data import AuthoringData
-from bonsai.bim.module.model.door import update_door_modifier_representation
 from bonsai.bim.module.model.decorator import PolylineDecorator, ProductDecorator
+from bonsai.bim.module.model.door import update_door_modifier_representation
 from bonsai.bim.module.model.polyline import PolylineOperator
 
 from . import mep, profile, slab, wall
@@ -697,119 +696,6 @@ class MirrorElements(bpy.types.Operator, tool.Ifc.Operator):
 
             obj.matrix_world = newmat
 
-class TrueMirrorElements(bpy.types.Operator, tool.Ifc.Operator):
-    bl_idname = "bim.mirror_geometry"
-    bl_label = "Mirror Element Geometry"
-    bl_options = {"REGISTER", "UNDO"}
-    bl_description = "Mirrors the selected objects by mirroring their representation (or their types representation)"
-
-    @classmethod
-    def poll(cls, context):
-        return context.selected_objects
-
-    def _execute(self, context):
-        for obj in context.selected_objects:
-            self.mirror_obj(obj)
-        return { "FINISHED" }
-
-    def mirror_obj(self, obj):
-        element = tool.Ifc.get_entity(obj)
-        if not element:
-            return
-        type_element = ifcopenshell.util.element.get_type(element)
-
-        active_context = tool.Geometry.get_active_representation_context(obj)
-
-        if type_element and element.id() != type_element.id():
-            # obj has a type, use / create inverted type and assign it
-            self.assign_inverted_type(element)
-        else:
-            # invert representation of entity directly
-            self.invert_representation(element)
-
-        # bonsai does not automatically switch to the representation that should be active in the given context
-        # when switching to a type that was previously viewed in another context (e.g. plan view),
-        # the wrong representation will be used.
-        bonsai.core.geometry.switch_representation(
-            tool.Ifc,
-            tool.Geometry,
-            obj=obj,
-            representation=ifcopenshell.util.representation.get_representation(element, active_context),
-            should_reload=False,
-            is_global=False,
-            should_sync_changes_first=False,
-        )
-
-    def invert_general_object(self, element):
-        if element.is_a("IfcProduct"):
-            if not element.Representation:
-                return
-        
-            for representation in element.Representation.Representations:
-                for item in representation.Items:
-                    builder = ifcopenshell.util.shape_builder.ShapeBuilder(tool.Ifc.get())
-                    builder.mirror(item, (1, 0), create_copy=False)
-        elif element.is_a("IfcTypeProduct"):
-            for representation_map in element.RepresentationMaps:
-                for item in representation_map.MappedRepresentation.Items:
-                    builder = ifcopenshell.util.shape_builder.ShapeBuilder(tool.Ifc.get())
-                    builder.mirror(item, (1, 0), create_copy=False)
-
-        tool.Geometry.reload_representation(tool.Ifc.get_object(element))
-
-    def invert_door_swing(self, element):
-        obj = tool.Ifc.get_object(element)
-
-        pset_data = json.loads(ifcopenshell.util.element.get_pset(element, "BBIM_Door", "Data"))
-
-        if "LEFT" in pset_data["door_type"]:
-            pset_data["door_type"] = pset_data["door_type"].replace("LEFT", "RIGHT")
-        elif "RIGHT" in pset_data["door_type"]:
-            pset_data["door_type"] = pset_data["door_type"].replace("RIGHT", "LEFT")
-
-        pset = tool.Pset.get_element_pset(element, "BBIM_Door")
-        pset_data_str = tool.Ifc.get().createIfcText(json.dumps(pset_data, default=list))
-        ifcopenshell.api.pset.edit_pset(tool.Ifc.get(), pset=pset, properties={"Data": pset_data_str})
-
-        pset_data.update(pset_data.pop("lining_properties"))
-        pset_data.update(pset_data.pop("panel_properties"))
-        pset_data.update(tool.Model.get_constituents_props_data(element))
-
-        # we need this workaround because set_props_kwargs_from_ifc_data will
-        # "update" the mesh of the active object, which will switch its representation
-        prev_active = bpy.context.view_layer.objects.active
-        bpy.context.view_layer.objects.active = obj
-
-        props = tool.Model.get_door_props(obj)
-        props.set_props_kwargs_from_ifc_data(pset_data)
-
-        bpy.context.view_layer.objects.active = prev_active
-
-        # regenerate door geometry
-        update_door_modifier_representation(obj)
-
-        tool.Model.mark_thumbnail_for_update(element)
-
-    def invert_representation(self, element):
-        if ifcopenshell.util.element.get_pset(element, "BBIM_Door", "Data"):
-            self.invert_door_swing(element)
-        else:
-            self.invert_general_object(element)
-
-    def assign_inverted_type(self, element):
-        type_element = ifcopenshell.util.element.get_type(element)
-
-        inverted_type = tool.Blender.Modifier.has_mirrored_type(type_element)
-        if not inverted_type:
-            old_to_new, _ = tool.Geometry.duplicate_ifc_objects([ tool.Ifc.get_object(type_element) ])
-            inverted_type = old_to_new[type_element][0]
-            self.invert_representation(inverted_type)
-            tool.Blender.Modifier.set_mirrored_type(inverted_type, type_element)
-            tool.Blender.Modifier.set_mirrored_type(type_element, inverted_type)
-            inverted_type.Name = f"{inverted_type.Name}.Mirror"
-
-        bonsai.core.type.assign_type(tool.Ifc, tool.Type, element, inverted_type)
-
 
 class TrueMirrorElements(bpy.types.Operator, tool.Ifc.Operator):
     bl_idname = "bim.mirror_geometry"
@@ -829,6 +715,7 @@ class TrueMirrorElements(bpy.types.Operator, tool.Ifc.Operator):
     def _execute(self, context):
         active_obj = context.active_object
         mirror_ref = None
+        objs_to_mirror: list[bpy.types.Object] = []
         if active_obj:
             objs_to_mirror = [obj for obj in context.selected_objects if obj != active_obj]
             if objs_to_mirror:
@@ -886,12 +773,19 @@ class TrueMirrorElements(bpy.types.Operator, tool.Ifc.Operator):
 
         usage_type = tool.Model.get_usage_type(element)
         type_has_reps = bool(type_element and (type_element.RepresentationMaps or []))
-        print(f"[mirror_obj]   mirror_axes={mirror_axes}  usage_type={usage_type!r}  type_element={getattr(type_element,'GlobalId',None)}  type_has_reps={type_has_reps}")
+        print(
+            f"[mirror_obj]   mirror_axes={mirror_axes}  usage_type={usage_type!r}  type_element={getattr(type_element,'GlobalId',None)}  type_has_reps={type_has_reps}"
+        )
         # LAYER2 (walls) and LAYER3 (slabs) generate instance-specific bodies via DumbWallGenerator /
         # DumbSlabGenerator rather than mapping the type's RepresentationMaps.  assign_inverted_type
         # only flips the *type* geometry and would leave the instance body unchanged, so both layer
         # usage types must go through invert_representation instead.
-        is_assign_type_path = bool(type_element and element.id() != type_element.id() and usage_type not in ("LAYER2", "LAYER3") and type_has_reps)
+        is_assign_type_path = bool(
+            type_element
+            and element.id() != type_element.id()
+            and usage_type not in ("LAYER2", "LAYER3")
+            and type_has_reps
+        )
         print(f"[mirror_obj]   is_assign_type_path={is_assign_type_path}")
         if is_assign_type_path:
             self.assign_inverted_type(element, mirror_axes)
@@ -916,18 +810,28 @@ class TrueMirrorElements(bpy.types.Operator, tool.Ifc.Operator):
         context.view_layer.update()
 
         print(f"[mirror_obj]   obj.location BEFORE origin move={tuple(round(v,4) for v in obj.location)}")
-        print(f"[mirror_obj]   obj.matrix_world.translation BEFORE={tuple(round(v,4) for v in obj.matrix_world.translation)}")
+        print(
+            f"[mirror_obj]   obj.matrix_world.translation BEFORE={tuple(round(v,4) for v in obj.matrix_world.translation)}"
+        )
         print(f"[mirror_obj]   obj.matrix_world.to_euler()={tuple(round(v,4) for v in obj.matrix_world.to_euler())}")
         if mirror_ref:
-            print(f"[mirror_obj]   mirror_ref={mirror_ref.name}  mirror_ref.matrix_world.translation={tuple(round(v,4) for v in mirror_ref.matrix_world.translation)}")
+            print(
+                f"[mirror_obj]   mirror_ref={mirror_ref.name}  mirror_ref.matrix_world.translation={tuple(round(v,4) for v in mirror_ref.matrix_world.translation)}"
+            )
             if is_assign_type_path:
                 # assign_inverted_type already applied any needed rotation change; only reflect translation.
                 origin_in_mirror = mirror_ref.matrix_world.inverted() @ obj.matrix_world.translation
-                print(f"[mirror_obj]   (assign_type) origin_in_mirror BEFORE x-flip={tuple(round(v,4) for v in origin_in_mirror)}")
+                print(
+                    f"[mirror_obj]   (assign_type) origin_in_mirror BEFORE x-flip={tuple(round(v,4) for v in origin_in_mirror)}"
+                )
                 origin_in_mirror.x *= -1
-                print(f"[mirror_obj]   (assign_type) origin_in_mirror AFTER  x-flip={tuple(round(v,4) for v in origin_in_mirror)}")
+                print(
+                    f"[mirror_obj]   (assign_type) origin_in_mirror AFTER  x-flip={tuple(round(v,4) for v in origin_in_mirror)}"
+                )
                 obj.matrix_world.translation = mirror_ref.matrix_world @ origin_in_mirror
-                print(f"[mirror_obj]   (assign_type) obj.matrix_world.translation AFTER={tuple(round(v,4) for v in obj.matrix_world.translation)}")
+                print(
+                    f"[mirror_obj]   (assign_type) obj.matrix_world.translation AFTER={tuple(round(v,4) for v in obj.matrix_world.translation)}"
+                )
             else:
                 # invert_representation path: reflect translation AND rotation.
                 # P_world = Householder from mirror plane normal = mirror_ref's local X.
@@ -940,7 +844,9 @@ class TrueMirrorElements(bpy.types.Operator, tool.Ifc.Operator):
                 #   roofs (P_local==P_world) flip correctly to ±45° as required.
                 n_world = mirror_ref.matrix_world.to_3x3().col[0].normalized()
                 print(f"[mirror_obj]   (invert_rep) n_world={tuple(round(v,4) for v in n_world)}")
-                print(f"[mirror_obj]   (invert_rep) obj.matrix_world euler BEFORE={tuple(round(v,4) for v in obj.matrix_world.to_euler())}")
+                print(
+                    f"[mirror_obj]   (invert_rep) obj.matrix_world euler BEFORE={tuple(round(v,4) for v in obj.matrix_world.to_euler())}"
+                )
                 P_world = Matrix.Scale(-1, 4, n_world).to_3x3()
                 sx = -1.0 if mirror_axes[0] > 0.5 else 1.0
                 sy = -1.0 if mirror_axes[1] > 0.5 else 1.0
@@ -953,8 +859,12 @@ class TrueMirrorElements(bpy.types.Operator, tool.Ifc.Operator):
                 new_mat = new_R.to_4x4()
                 new_mat.translation = new_t
                 obj.matrix_world = new_mat
-                print(f"[mirror_obj]   (invert_rep) obj.matrix_world.translation AFTER={tuple(round(v,4) for v in obj.matrix_world.translation)}")
-                print(f"[mirror_obj]   (invert_rep) obj.matrix_world euler AFTER={tuple(round(v,4) for v in obj.matrix_world.to_euler())}")
+                print(
+                    f"[mirror_obj]   (invert_rep) obj.matrix_world.translation AFTER={tuple(round(v,4) for v in obj.matrix_world.translation)}"
+                )
+                print(
+                    f"[mirror_obj]   (invert_rep) obj.matrix_world euler AFTER={tuple(round(v,4) for v in obj.matrix_world.to_euler())}"
+                )
         else:
             print(f"[mirror_obj]   no mirror_ref — x-only bounding-box correction")
             # Fall back: nudge in place to compensate for bounding box shift after inversion
@@ -980,9 +890,13 @@ class TrueMirrorElements(bpy.types.Operator, tool.Ifc.Operator):
             # boolean voids.  If the placement is stale the void lands at the wrong offset.
             # Calling edit_object_placement here also makes the depsgraph handler skip a
             # redundant second call (record_object_position marks it up-to-date).
-            bonsai.core.geometry.edit_object_placement(tool.Ifc, tool.Geometry, tool.Surveyor, obj=obj, apply_scale=False)
+            bonsai.core.geometry.edit_object_placement(
+                tool.Ifc, tool.Geometry, tool.Surveyor, obj=obj, apply_scale=False
+            )
             M_slab_new = ifcopenshell.util.placement.get_local_placement(element.ObjectPlacement)
-            self._apply_opening_mirror(element, mirror_axes, M_slab_before, opening_placements_before, frame_change, M_slab_new)
+            self._apply_opening_mirror(
+                element, mirror_axes, M_slab_before, opening_placements_before, frame_change, M_slab_new
+            )
             for rel in element.HasOpenings:
                 opening = rel.RelatedOpeningElement
                 tool.Geometry.clear_cache(opening)
@@ -1000,7 +914,9 @@ class TrueMirrorElements(bpy.types.Operator, tool.Ifc.Operator):
             representation=ifcopenshell.util.representation.get_representation(element, active_context),
         )
 
-    def _apply_opening_mirror(self, element, mirror_axes, M_slab_before, opening_placements_before, frame_change, M_slab_new=None):
+    def _apply_opening_mirror(
+        self, element, mirror_axes, M_slab_before, opening_placements_before, frame_change, M_slab_new=None
+    ):
         """Mirror IfcOpeningElement placements and geometry in element-local space.
 
         frame_change = inv(R_elem_new) @ R_elem_old accounts for any element rotation change
@@ -1144,8 +1060,12 @@ class TrueMirrorElements(bpy.types.Operator, tool.Ifc.Operator):
                 print(f"[mirror_item]     fallback → builder.mirror axes_2d={mirror_axes_2d}  full_3d={mirror_axes}")
                 if item.is_a("IfcExtrudedAreaSolid"):
                     sw = item.SweptArea
-                    print(f"[mirror_item]     SweptArea={sw.is_a() if sw else None}  OuterCurve={getattr(sw, 'OuterCurve', 'N/A') if sw else None}")
-                    print(f"[mirror_item]     ExtrudedDirection BEFORE={item.ExtrudedDirection.DirectionRatios}  Position={item.Position}")
+                    print(
+                        f"[mirror_item]     SweptArea={sw.is_a() if sw else None}  OuterCurve={getattr(sw, 'OuterCurve', 'N/A') if sw else None}"
+                    )
+                    print(
+                        f"[mirror_item]     ExtrudedDirection BEFORE={item.ExtrudedDirection.DirectionRatios}  Position={item.Position}"
+                    )
                     oc = getattr(sw, "OuterCurve", None) if sw else None
                     if oc and oc.is_a("IfcIndexedPolyCurve"):
                         pts = oc.Points
@@ -1168,11 +1088,13 @@ class TrueMirrorElements(bpy.types.Operator, tool.Ifc.Operator):
                 print(f"[invert_general_object]   no Representation, skipping")
                 return
             for representation in element.Representation.Representations:
-                print(f"[invert_general_object]   rep={representation.RepresentationIdentifier!r}/{representation.RepresentationType!r} items={len(representation.Items)}")
+                print(
+                    f"[invert_general_object]   rep={representation.RepresentationIdentifier!r}/{representation.RepresentationType!r} items={len(representation.Items)}"
+                )
                 for item in representation.Items:
                     mirror_item(item)
         elif element.is_a("IfcTypeProduct"):
-            for representation_map in (element.RepresentationMaps or []):
+            for representation_map in element.RepresentationMaps or []:
                 for item in representation_map.MappedRepresentation.Items:
                     mirror_item(item)
 

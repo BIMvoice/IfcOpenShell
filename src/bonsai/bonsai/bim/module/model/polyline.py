@@ -19,19 +19,19 @@
 from __future__ import annotations
 
 from math import cos, pi, radians, tan
-from typing import Literal, Union
+from typing import Any, Literal, Union
 
 import bmesh
 import bpy
 import ifcopenshell
+import ifcopenshell.geom
+import ifcopenshell.util.element
 import ifcopenshell.util.unit
 from mathutils import Matrix, Quaternion, Vector
 
 import bonsai.tool as tool
-from bonsai.bim.module.model.decorator import PolylineDecorator
 from bonsai.bim.module.geometry.decorator import ItemDecorator
-from typing import Optional, Union, Literal, Any
-from lark import Lark, Transformer
+from bonsai.bim.module.model.decorator import PolylineDecorator
 
 
 def create_bmesh_from_vertices(vertices, is_closed=False):

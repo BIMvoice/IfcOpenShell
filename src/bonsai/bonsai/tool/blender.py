@@ -57,12 +57,12 @@ from typing import (
 import bmesh
 import bpy
 import gpu
+import ifcopenshell.api.pset
 import ifcopenshell.util.element
 import numpy as np
 import numpy.typing as npt
 from gpu_extras.batch import batch_for_shader
 from ifcopenshell import entity_instance
-import ifcopenshell.api.pset
 from mathutils import Matrix, Vector
 
 import bonsai.bim

@@ -39,7 +39,7 @@ import numpy as np
 import shapely
 from bpy.types import Operator, SpaceView3D
 from gpu_extras.batch import batch_for_shader
-from mathutils import Euler, Matrix, Vector
+from mathutils import Matrix, Vector
 
 import bonsai.core.geometry
 import bonsai.tool as tool
@@ -732,7 +732,6 @@ class FlipFill(bpy.types.Operator, tool.Ifc.Operator):
             tool.Geometry.flip_object(obj, "XY")
             ifcopenshell.api.geometry.edit_object_placement(tool.Ifc.get(), filled_opening, obj.matrix_world)
             tool.Geometry.reload_representation(filled_object)
-
 
         return {"FINISHED"}
 
