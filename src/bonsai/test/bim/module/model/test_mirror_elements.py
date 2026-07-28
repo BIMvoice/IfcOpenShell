@@ -758,6 +758,135 @@ class TestDuplicateThenMirrorEndToEnd(NewFile):
         mirrored = self._profile_points(dup_type_after)
         assert mirrored == [(-x, y) for x, y in profile_before], "the duplicate's new type must be a true X mirror"
 
+    def _setup_private_body_occurrence(self):
+        """A typed occurrence whose own Body is private geometry, unrelated in shape to
+        its type's RepresentationMaps -- matching #7991's beam: a steel angle authored as
+        its own IfcFacetedBrep while classified against a type that separately carries an
+        unused, differently-shaped swept-solid RepresentationMap."""
+        import ifcopenshell.api.root
+        import ifcopenshell.api.spatial
+        import ifcopenshell.api.type
+        import ifcopenshell.util.representation
+
+        import bonsai.tool as tool
+
+        bpy.ops.bim.create_project()
+        ifc_file = tool.Ifc.get()
+        storey = ifc_file.by_type("IfcBuildingStorey")[0]
+        body_context = ifcopenshell.util.representation.get_context(ifc_file, "Model", "Body", "MODEL_VIEW")
+        collection = tool.Ifc.get_object(storey).users_collection[0]
+
+        beam_type = ifcopenshell.api.root.create_entity(ifc_file, ifc_class="IfcBeamType", name="L200-100-10")
+        placeholder_points = [
+            ifc_file.create_entity("IfcCartesianPoint", Coordinates=c) for c in ((0.0, 0.0), (0.001, 0.0), (0.0, 0.001))
+        ]
+        placeholder_rep, _ = self._make_polygon_representation(ifc_file, body_context, placeholder_points)
+        placeholder_map = ifc_file.create_entity(
+            "IfcRepresentationMap",
+            MappingOrigin=ifc_file.create_entity(
+                "IfcAxis2Placement3D", Location=ifc_file.create_entity("IfcCartesianPoint", Coordinates=(0.0, 0.0, 0.0))
+            ),
+            MappedRepresentation=placeholder_rep,
+        )
+        beam_type.RepresentationMaps = [placeholder_map]
+
+        beam_type_mesh = self._make_blender_mesh("L200-100-10-mesh")
+        beam_type_obj = bpy.data.objects.new("L200-100-10", beam_type_mesh)
+        collection.objects.link(beam_type_obj)
+        tool.Ifc.link(beam_type, beam_type_obj)
+        tool.Ifc.link(placeholder_rep, beam_type_mesh)
+
+        beam = ifcopenshell.api.root.create_entity(ifc_file, ifc_class="IfcBeam", name="Hangijzer")
+        ifcopenshell.api.spatial.assign_container(ifc_file, products=[beam], relating_structure=storey)
+        real_shape_rep, real_solid = self._make_triangle_representation(ifc_file, body_context)
+        beam.Representation = ifc_file.create_entity("IfcProductDefinitionShape", Representations=[real_shape_rep])
+        ifcopenshell.api.type.assign_type(
+            ifc_file, related_objects=[beam], relating_type=beam_type, should_map_representations=False
+        )
+
+        mesh = self._make_blender_mesh("Hangijzer-mesh")
+        obj = bpy.data.objects.new("Hangijzer", mesh)
+        collection.objects.link(obj)
+        tool.Ifc.link(beam, obj)
+        tool.Ifc.link(real_shape_rep, mesh)
+        obj.matrix_world = Matrix.Identity(4)
+        bpy.context.view_layer.update()
+
+        return ifc_file, beam_type, beam, obj, real_solid
+
+    def _make_polygon_representation(self, ifc_file, context, points):
+        profile = ifc_file.create_entity(
+            "IfcArbitraryClosedProfileDef",
+            ProfileType="AREA",
+            OuterCurve=ifc_file.create_entity("IfcPolyline", Points=points + [points[0]]),
+        )
+        solid = ifc_file.create_entity(
+            "IfcExtrudedAreaSolid",
+            SweptArea=profile,
+            Position=ifc_file.create_entity(
+                "IfcAxis2Placement3D", Location=ifc_file.create_entity("IfcCartesianPoint", Coordinates=(0.0, 0.0, 0.0))
+            ),
+            ExtrudedDirection=ifc_file.create_entity("IfcDirection", DirectionRatios=(0.0, 0.0, 1.0)),
+            Depth=1.0,
+        )
+        shape_rep = ifc_file.create_entity(
+            "IfcShapeRepresentation",
+            ContextOfItems=context,
+            RepresentationIdentifier="Body",
+            RepresentationType="SweptSolid",
+            Items=[solid],
+        )
+        return shape_rep, solid
+
+    def test_duplicating_a_privately_bodied_occurrence_keeps_its_own_body(self):
+        """#7991: the beam's own body must survive IFC Duplicate even though its type
+        separately carries an unrelated RepresentationMaps entry. Before the fix,
+        bonsai.core.root.copy_class always preferred mapping a duplicate to its type
+        whenever the type had any RepresentationMaps, discarding the occurrence's real
+        geometry for whatever the type's map happened to contain -- collapsing the beam
+        to that map's shape (#7991's beam collapsed to a 1mm sliver this way)."""
+        import ifcopenshell.util.element
+
+        import bonsai.tool as tool
+
+        ifc_file, beam_type, beam, obj, real_solid = self._setup_private_body_occurrence()
+        real_points_before = [tuple(round(c, 6) for c in p.Coordinates) for p in real_solid.SweptArea.OuterCurve.Points]
+
+        bpy.ops.object.select_all(action="DESELECT")
+        obj.select_set(True)
+        bpy.context.view_layer.objects.active = obj
+        bpy.ops.bim.override_object_duplicate_move(is_interactive=False)
+        bpy.context.view_layer.update()
+
+        dup_obj = bpy.data.objects["Hangijzer.001"]
+        dup_element = tool.Ifc.get_entity(dup_obj)
+        assert ifcopenshell.util.element.get_type(dup_element) == beam_type
+
+        dup_items = dup_element.Representation.Representations[0].Items
+        assert not any(
+            item.is_a("IfcMappedItem") for item in dup_items
+        ), f"duplicate's private body was replaced by a mapped item: {[i.is_a() for i in dup_items]}"
+        dup_points = [tuple(round(c, 6) for c in p.Coordinates) for p in dup_items[0].SweptArea.OuterCurve.Points]
+        assert dup_points == real_points_before
+
+        dup_obj.location = (5.0, 0.0, 0.0)
+        bpy.context.view_layer.update()
+
+        bpy.ops.object.select_all(action="DESELECT")
+        dup_obj.select_set(True)
+        obj.select_set(True)
+        bpy.context.view_layer.objects.active = obj
+
+        result = bpy.ops.bim.override_object_mirror("INVOKE_DEFAULT")
+        bpy.context.view_layer.update()
+        assert result == {"FINISHED"}
+
+        dup_items_after = dup_element.Representation.Representations[0].Items
+        mirrored_points = [
+            tuple(round(c, 6) for c in p.Coordinates) for p in dup_items_after[0].SweptArea.OuterCurve.Points
+        ]
+        assert mirrored_points == [(-x, y) for x, y in real_points_before]
+
     def test_ctrl_m_keymap_reaches_the_real_mirror_operator(self):
         wm = bpy.context.window_manager
         km = wm.keyconfigs.addon.keymaps.get("Object Mode")

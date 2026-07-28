@@ -122,6 +122,21 @@ class Root(bonsai.core.tool.Root):
         return bool(element.RepresentationMaps)
 
     @classmethod
+    def body_representation_is_mapped(cls, element: ifcopenshell.entity_instance) -> bool:
+        """Whether this occurrence's own Body representation is an ``IfcMappedItem``.
+
+        A type carrying ``RepresentationMaps`` does not mean every occurrence classified
+        against it actually uses them: a Body authored as a private mesh (``IfcFacetedBrep``,
+        common for imported steel members) is not mapped even when its type happens to also
+        declare an unused swept-solid representation map.
+        """
+        for representation in ifcopenshell.util.representation.get_representations_iter(element):
+            if representation.RepresentationIdentifier != "Body":
+                continue
+            return any(item.is_a("IfcMappedItem") for item in representation.Items)
+        return False
+
+    @classmethod
     def get_decomposition_relationships(
         cls, objs: list[bpy.types.Object]
     ) -> dict[ifcopenshell.entity_instance, dict[str, Any]]:
