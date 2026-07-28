@@ -127,8 +127,10 @@ def _operator():
     from bonsai.bim.module.model.product import MirrorElements
 
     methods = (
+        "body_representation_is_mapped",
         "find_uninvertible_items",
         "get_mirror_axes",
+        "get_reference_mirror_normal",
         "invert_general_object",
         "invert_representation",
         "get_mirror_plane_point",
@@ -225,7 +227,7 @@ def test_adjust_last_operation_undoes_the_previous_run_first():
         resolve_selection = MirrorElements.__dict__["resolve_selection"]
         mirror_axis = "Y"
 
-        def mirror_obj(self, context, obj, mirror_ref=None, axis_index=0):
+        def mirror_obj(self, context, obj, mirror_ref=None, axis_index=0, mirror_normal_world=None):
             replayed.append((obj.name, axis_index))
             return True
 
@@ -260,7 +262,7 @@ def test_a_fresh_invocation_does_not_undo_the_previous_run():
         resolve_selection = MirrorElements.__dict__["resolve_selection"]
         mirror_axis = "Y"
 
-        def mirror_obj(self, context, obj, mirror_ref=None, axis_index=0):
+        def mirror_obj(self, context, obj, mirror_ref=None, axis_index=0, mirror_normal_world=None):
             replayed.append((obj.name, axis_index))
             return True
 
@@ -289,7 +291,7 @@ def test_a_stale_run_from_another_project_is_not_replayed():
         revert_last_run = MirrorElements.revert_last_run
         find_object = staticmethod(lambda name: None)
 
-        def mirror_obj(self, context, obj, mirror_ref=None, axis_index=0):
+        def mirror_obj(self, context, obj, mirror_ref=None, axis_index=0, mirror_normal_world=None):
             replayed.append(obj.name)
             return True
 
@@ -333,7 +335,7 @@ def test_the_mirror_plane_ignores_an_active_object_that_is_not_selected():
         resolve_selection = MirrorElements.__dict__["resolve_selection"]
         mirror_axis = "X"
 
-        def mirror_obj(self, context, obj, mirror_ref=None, axis_index=0):
+        def mirror_obj(self, context, obj, mirror_ref=None, axis_index=0, mirror_normal_world=None):
             seen.append((obj.name, mirror_ref.name if mirror_ref else None))
             return True
 
@@ -367,13 +369,219 @@ def test_get_mirror_axes_without_a_reference_honours_the_chosen_axis():
 
 
 def test_get_mirror_axes_uses_the_chosen_axis_of_the_reference():
-    """A reference turned 90 degrees about Z has its local Y pointing along world -X."""
+    """With no explicit ``mirror_normal_world`` this falls back to the reference's own
+    ``axis_index`` column, the pre-#7991 behaviour. ``_execute`` never takes this path with a
+    reference any more (see ``get_reference_mirror_normal`` below); this only pins the
+    fallback used for the degenerate case and keeps the low-level snapping maths covered.
+
+    A reference turned 90 degrees about Z has its local Y pointing along world -X."""
     operator = _operator()
     obj = SimpleNamespace(matrix_world=Matrix.Identity(4))
     reference = SimpleNamespace(matrix_world=Matrix.Rotation(np.radians(90), 4, "Z"))
     assert operator.get_mirror_axes(obj, reference, 0) == (0.0, 1.0, 0.0)
     assert operator.get_mirror_axes(obj, reference, 1) == (1.0, 0.0, 0.0)
     assert operator.get_mirror_axes(obj, reference, 2) == (0.0, 0.0, 1.0)
+
+
+def test_get_mirror_axes_honours_an_explicit_world_normal_over_the_references_axis():
+    """When ``_execute`` has already derived the plane's real normal, that must win, even if
+    it disagrees with what the reference's own local axis would have given."""
+    operator = _operator()
+    obj = SimpleNamespace(matrix_world=Matrix.Identity(4))
+    reference = SimpleNamespace(matrix_world=Matrix.Rotation(np.radians(90), 4, "Z"))
+    assert operator.get_mirror_axes(obj, reference, 0, Vector((1.0, 0.0, 0.0))) == (1.0, 0.0, 0.0)
+
+
+def test_get_reference_mirror_normal_derives_from_real_positions_not_the_references_rotation():
+    """#7991: mirroring "not in the right direction". The old default mirrored along the
+    reference's raw local X regardless of where anything actually was -- the same mistake
+    ``get_wall_axis`` makes assuming local X is a wall's run direction, which for an
+    imported element it very often is not. The plane's normal must instead follow the real
+    direction from what is being mirrored to the reference.
+
+    The reference here is rotated 90 degrees about Z, so its local X points along world +Y.
+    The object being mirrored sits 5 units along world +X from the reference (which has an
+    all-zero bounding box, so its plane point is its own origin). The correct normal points
+    from the object back to the reference: world -X. The old per-axis default would have
+    picked world +Y instead, a plane the object doesn't even cross (its Y is already 0),
+    which is exactly what "nothing looked mirrored" or "moved the wrong way" looks like."""
+    operator = _operator()
+    reference = SimpleNamespace(matrix_world=Matrix.Rotation(np.radians(90), 4, "Z"), bound_box=[(0.0, 0.0, 0.0)] * 8)
+    obj = SimpleNamespace(matrix_world=Matrix.Translation((5.0, 0.0, 0.0)))
+
+    normal = operator.get_reference_mirror_normal([obj], reference, axis_index=0)
+
+    assert np.allclose(list(normal), [-1.0, 0.0, 0.0])
+
+
+def test_get_reference_mirror_normal_uses_the_group_centroid_for_multiple_objects():
+    operator = _operator()
+    reference = SimpleNamespace(matrix_world=Matrix.Identity(4), bound_box=[(0.0, 0.0, 0.0)] * 8)
+    objs = [
+        SimpleNamespace(matrix_world=Matrix.Translation((2.0, 4.0, 0.0))),
+        SimpleNamespace(matrix_world=Matrix.Translation((2.0, -4.0, 0.0))),
+    ]
+    # centroid is (2, 0, 0); the reference sits at the world origin.
+    normal = operator.get_reference_mirror_normal(objs, reference, axis_index=0)
+    assert np.allclose(list(normal), [-1.0, 0.0, 0.0])
+
+
+def test_get_reference_mirror_normal_snaps_an_oblique_direction_to_the_dominant_world_axis():
+    """The representation-level flip only supports an axis-aligned local mirror. A raw,
+    non-axis-aligned direction from the group to the reference would reflect the placement
+    about a plane the snapped local flip cannot match, tilting an otherwise perfectly
+    axis-aligned object out of alignment (caught mirroring a real floor plan: the mirrored
+    slab's world bounding box no longer matched the original's dimensions)."""
+    operator = _operator()
+    reference = SimpleNamespace(matrix_world=Matrix.Identity(4), bound_box=[(0.0, 0.0, 0.0)] * 8)
+    obj = SimpleNamespace(matrix_world=Matrix.Translation((-3.0, 4.0, 0.1)))
+
+    normal = operator.get_reference_mirror_normal([obj], reference, axis_index=0)
+
+    # delta = (0,0,0) - (-3,4,0.1) = (3,-4,-0.1); Y has the largest magnitude.
+    assert np.allclose(list(normal), [0.0, -1.0, 0.0])
+
+
+def test_get_reference_mirror_normal_falls_back_to_the_references_axis_when_centred_on_it():
+    """Degenerate case: the selection's centroid coincides with the reference's own plane
+    point, so there is no direction to infer from real positions."""
+    operator = _operator()
+    reference = SimpleNamespace(matrix_world=Matrix.Rotation(np.radians(90), 4, "Z"), bound_box=[(0.0, 0.0, 0.0)] * 8)
+    obj = SimpleNamespace(matrix_world=Matrix.Identity(4))
+
+    normal = operator.get_reference_mirror_normal([obj], reference, axis_index=0)
+
+    assert np.allclose(list(normal), [0.0, 1.0, 0.0], atol=1e-6)
+
+
+def test_mirroring_across_a_rotated_reference_reflects_the_real_position():
+    """Chains ``get_reference_mirror_normal`` into ``reflect_placement``: the object must
+    land at its true mirror image relative to the reference, not get shunted along the
+    reference's incidental rotation. Mirrors the setup above: reference at the world origin
+    rotated 90 degrees about Z, object 5 units along world +X, so its mirror image is 5
+    units along world -X."""
+    operator = _operator()
+    reference = SimpleNamespace(matrix_world=Matrix.Rotation(np.radians(90), 4, "Z"), bound_box=[(0.0, 0.0, 0.0)] * 8)
+    obj = SimpleNamespace(matrix_world=Matrix.Translation((5.0, 0.0, 0.0)), location=None)
+
+    normal = operator.get_reference_mirror_normal([obj], reference, axis_index=0)
+    operator.reflect_placement(obj, reference, (1.0, 0.0, 0.0), {}, 0, normal)
+
+    assert np.allclose(list(obj.matrix_world.translation), [-5.0, 0.0, 0.0])
+
+
+def test_draw_hides_the_axis_choice_once_a_reference_is_present():
+    """#7991 / Petru: "we dont need axis when using another object as reference... I dont
+    want to overcomplicate this." The axis is derived automatically once there is a
+    reference, so offering the dropdown would be actively misleading."""
+    from bonsai.bim.module.model.product import MirrorElements
+
+    class FakeLayout:
+        def __init__(self):
+            self.shown = []
+
+        def prop(self, data, prop_name):
+            self.shown.append(prop_name)
+
+    class Stub:
+        draw = MirrorElements.__dict__["draw"]
+        resolve_selection = MirrorElements.__dict__["resolve_selection"]
+        mirror_axis = "X"
+
+    target = SimpleNamespace(name="target", select_get=lambda: True)
+    reference = SimpleNamespace(name="reference", select_get=lambda: True)
+    context = SimpleNamespace(active_object=reference, selected_objects=[target, reference])
+
+    stub = Stub()
+    stub.layout = FakeLayout()
+    stub.draw(context)
+
+    assert stub.layout.shown == []
+
+
+def test_draw_shows_the_axis_choice_for_a_single_object():
+    from bonsai.bim.module.model.product import MirrorElements
+
+    class FakeLayout:
+        def __init__(self):
+            self.shown = []
+
+        def prop(self, data, prop_name):
+            self.shown.append(prop_name)
+
+    class Stub:
+        draw = MirrorElements.__dict__["draw"]
+        resolve_selection = MirrorElements.__dict__["resolve_selection"]
+        mirror_axis = "X"
+
+    target = SimpleNamespace(name="target", select_get=lambda: True)
+    context = SimpleNamespace(active_object=target, selected_objects=[target])
+
+    stub = Stub()
+    stub.layout = FakeLayout()
+    stub.draw(context)
+
+    assert stub.layout.shown == ["mirror_axis"]
+
+
+def test_body_representation_is_mapped_true_for_a_mapped_occurrence():
+    ifc_file, _, occurrences, _ = _mapped_type_file()
+    operator = _operator()
+    with patch("bonsai.tool.Ifc.get", return_value=ifc_file):
+        assert operator.body_representation_is_mapped(occurrences[0]) is True
+
+
+def test_body_representation_is_mapped_false_for_a_private_body():
+    """#7991: a type carrying RepresentationMaps does not mean every occurrence classified
+    against it actually uses them. An imported steel beam commonly keeps its own private
+    Body (here a swept solid standing in for the real IfcFacetedBrep) while still being
+    classified against a type that separately declares an unused swept-solid representation
+    map. Mirroring must invert the occurrence's own geometry, not the type's unused one, or
+    the occurrence gets reassigned to geometry it never actually displayed -- exactly what
+    made the beam in #7991 disappear."""
+    f = ifcopenshell.file(schema="IFC4")
+    context = f.create_entity(
+        "IfcGeometricRepresentationContext",
+        ContextType="Model",
+        CoordinateSpaceDimension=3,
+        WorldCoordinateSystem=f.create_entity(
+            "IfcAxis2Placement3D", Location=f.create_entity("IfcCartesianPoint", Coordinates=(0.0, 0.0, 0.0))
+        ),
+    )
+    points = [f.create_entity("IfcCartesianPoint", Coordinates=c) for c in ((0.0, 0.0), (1.0, 0.0), (0.0, 1.0))]
+    solid = f.create_entity(
+        "IfcExtrudedAreaSolid",
+        SweptArea=f.create_entity(
+            "IfcArbitraryClosedProfileDef",
+            ProfileType="AREA",
+            OuterCurve=f.create_entity("IfcPolyline", Points=points + [points[0]]),
+        ),
+        Position=f.create_entity(
+            "IfcAxis2Placement3D", Location=f.create_entity("IfcCartesianPoint", Coordinates=(0.0, 0.0, 0.0))
+        ),
+        ExtrudedDirection=f.create_entity("IfcDirection", DirectionRatios=(0.0, 0.0, 1.0)),
+        Depth=1.0,
+    )
+    occurrence = f.create_entity(
+        "IfcBeam",
+        GlobalId="2" * 22,
+        Representation=f.create_entity(
+            "IfcProductDefinitionShape",
+            Representations=[
+                f.create_entity(
+                    "IfcShapeRepresentation",
+                    ContextOfItems=context,
+                    RepresentationIdentifier="Body",
+                    RepresentationType="SweptSolid",
+                    Items=[solid],
+                )
+            ],
+        ),
+    )
+
+    operator = _operator()
+    with patch("bonsai.tool.Ifc.get", return_value=f):
+        assert operator.body_representation_is_mapped(occurrence) is False
 
 
 def test_a_swept_solid_reports_that_it_cannot_be_inverted_along_z():
