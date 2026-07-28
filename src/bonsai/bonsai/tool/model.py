@@ -1186,9 +1186,19 @@ class Model(bonsai.core.tool.Model):
 
         Both in world space, and the normal is snapped square to the run axis
         so a filling ends up parallel to the wall even on a faceted face.
-        ``None`` when the object has no faces, when nothing lies near
-        ``point``, or when the nearest face is an end cap or a top rather than
-        a face a filling can sit in."""
+        ``None`` when the object has no faces or when nothing lies near
+        ``point``.
+
+        A short or curved host (an arc-faceted pier, a stepped footing) has
+        end-cap and step faces whose own normal runs along the run axis
+        instead of across it, so it cannot say which side of the wall the
+        click is on. Callers only reach this method when the host has no
+        AXIS2 reference line (see ``has_layer2_reference_line``), so there is
+        no placement-derived axis left that is safe to fall back to: which
+        side of the wall's own centreline ``point`` landed on is used
+        instead. That reproduces the layer-set behaviour on every ordinary
+        side face, and keeps the filling parallel to the run rather than
+        rotating it onto the placement X the caller would otherwise use."""
         mesh = obj.data
         if not isinstance(mesh, bpy.types.Mesh) or not len(mesh.polygons):
             return None
@@ -1202,16 +1212,28 @@ class Model(bonsai.core.tool.Model):
             return None
         if not hit:
             return None
+        world_point = matrix @ location
+        across = Vector((-run.y, run.x, 0.0))
+
         world_normal = (matrix.to_3x3().inverted().transposed() @ normal).normalized()
         horizontal = Vector((world_normal.x, world_normal.y, 0.0))
-        if horizontal.length < 0.5:
+        if horizontal.length >= 0.5:
+            inward = -horizontal.normalized()
+            alignment = across.dot(inward)
+            if abs(alignment) >= 0.5:
+                return (across if alignment > 0 else -across), world_point
+
+        # The face normal at the click doesn't reliably say which side of the
+        # wall it's on (a top/bottom cap, an end cap, or a step riser on a
+        # faceted run). Use which side of the wall's own centreline the point
+        # landed on instead: that stays well-defined everywhere the run axis
+        # itself is, including those faces.
+        centroid_xy = np.array([(matrix @ v.co)[:2] for v in mesh.vertices]).mean(axis=0)
+        offset = Vector((world_point.x - centroid_xy[0], world_point.y - centroid_xy[1], 0.0))
+        side = across.dot(offset)
+        if abs(side) < 1e-9:
             return None
-        inward = -horizontal.normalized()
-        across = Vector((-run.y, run.x, 0.0))
-        alignment = across.dot(inward)
-        if abs(alignment) < 0.5:
-            return None
-        return (across if alignment > 0 else -across), matrix @ location
+        return (-across if side > 0 else across), world_point
 
     @classmethod
     def get_filling_rotation(cls, inward: Vector) -> Matrix:
