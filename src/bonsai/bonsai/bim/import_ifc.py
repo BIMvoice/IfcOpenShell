@@ -206,7 +206,15 @@ class IfcImporter:
     """Either provided by user as an attribute or will be loaded from ``input_file`` during ``execute()``."""
 
     elements: set[ifcopenshell.entity_instance]
-    """Set of IfcElements to import. Excluding ``gross_elements`` and ```native_elements``."""
+    """Set of IfcElements to import. Excluding ``gross_elements``, ``baked_void_elements`` and ```native_elements``."""
+
+    gross_elements: set[ifcopenshell.entity_instance]
+    """Elements whose opening cuts were skipped because there were too many of
+    them. The user is offered a manual recut for these."""
+
+    baked_void_elements: set[ifcopenshell.entity_instance]
+    """Elements loaded without opening cuts because their body already includes
+    them. Nothing was skipped, so these are not offered for recut."""
 
     def __init__(self, ifc_import_settings: IfcImportSettings):
         self.ifc_import_settings = ifc_import_settings
@@ -219,6 +227,7 @@ class IfcImporter:
         self.elements: set[ifcopenshell.entity_instance] = set()
         self.annotations: set[ifcopenshell.entity_instance] = set()
         self.gross_elements: set[ifcopenshell.entity_instance] = set()
+        self.baked_void_elements: set[ifcopenshell.entity_instance] = set()
         self.broken_arrays: set[ifcopenshell.entity_instance] = set()
         self.element_types: set[ifcopenshell.entity_instance] = set()
         self.spatial_elements: set[ifcopenshell.entity_instance] = set()
@@ -369,11 +378,16 @@ class IfcImporter:
             else:
                 self.spatial_elements = set(self.file.by_type("IfcSpatialElement"))
 
-        # Detect excessive voids, and voids a Reference View exporter already
-        # baked into the host body.
+        self.classify_voided_elements()
+
+    def classify_voided_elements(self) -> None:
+        """Split off the elements that must load without opening subtractions:
+        the ones with more voids than we will cut, and the ones a Reference
+        View exporter already cut into the host body."""
         void_limit = self.ifc_import_settings.void_limit
         reference_view = self.ifc_import_settings.is_reference_view
         self.gross_elements = set()
+        self.baked_void_elements = set()
         for element in self.elements:
             openings = getattr(element, "HasOpenings", None) or ()
             if not openings:
@@ -381,8 +395,9 @@ class IfcImporter:
             if len(openings) > void_limit:
                 self.gross_elements.add(element)
             elif reference_view and not self.has_subtractive_void(element):
-                self.gross_elements.add(element)
-        self.elements = self.elements.difference(self.gross_elements)
+                self.baked_void_elements.add(element)
+        self.elements -= self.gross_elements
+        self.elements -= self.baked_void_elements
 
         if self.gross_elements:
             print("Warning! Excessive voids were found and skipped for the following elements:")
@@ -655,7 +670,7 @@ class IfcImporter:
 
     def create_elements(self) -> None:
         self.create_generic_elements(self.elements)
-        self.create_generic_elements(self.gross_elements, is_gross=True)
+        self.create_generic_elements(self.gross_elements | self.baked_void_elements, is_gross=True)
 
     def create_generic_elements(self, elements: set[ifcopenshell.entity_instance], is_gross=False) -> None:
         if isinstance(self.file, ifcopenshell.sqlite):

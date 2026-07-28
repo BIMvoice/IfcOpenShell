@@ -85,3 +85,43 @@ def test_host_without_openings_is_not_affected():
     ifc = ifcopenshell.file(schema="IFC4")
     wall = ifc.create_entity("IfcWall", GlobalId=ifcopenshell.guid.new())
     assert IfcImporter.has_subtractive_void(wall) is False
+
+
+def _classify(elements, *, reference_view, void_limit=30):
+    """Run ``process_element_filter``'s void classification without Blender."""
+    from bonsai.bim.import_ifc import IfcImporter
+
+    importer = IfcImporter.__new__(IfcImporter)
+    importer.elements = set(elements)
+    importer.ifc_import_settings = type(
+        "Settings", (), {"void_limit": void_limit, "is_reference_view": reference_view}
+    )()
+    IfcImporter.classify_voided_elements(importer)
+    return importer
+
+
+def test_baked_voids_are_not_offered_for_recut():
+    """The banner asks the user to apply cuts we skipped. Nothing was skipped
+    on a host whose body already includes its voids, and on Perspective
+    générique.ifc that banner named all 7 walls on every load."""
+    wall = _host_with_opening("Reference")
+    importer = _classify([wall], reference_view=True)
+    assert importer.baked_void_elements == {wall}
+    assert importer.gross_elements == set()
+    assert wall not in importer.elements
+
+
+def test_excessive_voids_are_still_offered_for_recut():
+    wall = _host_with_opening("Body")
+    importer = _classify([wall], reference_view=True, void_limit=0)
+    assert importer.gross_elements == {wall}
+    assert importer.baked_void_elements == set()
+    assert wall not in importer.elements
+
+
+def test_authored_void_on_a_reference_view_host_is_cut_normally():
+    wall = _host_with_opening("Body")
+    importer = _classify([wall], reference_view=True)
+    assert importer.elements == {wall}
+    assert importer.gross_elements == set()
+    assert importer.baked_void_elements == set()
