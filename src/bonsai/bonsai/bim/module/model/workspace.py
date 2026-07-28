@@ -1325,32 +1325,33 @@ class Hotkey(bpy.types.Operator, tool.Ifc.Operator):
             bpy.ops.bim.generate_space()
 
     def hotkey_S_M(self):
+        # Shift+M is shared between Merge and Mirror. An active LAYER2 element (wall, railing)
+        # used to force a merge attempt outright and error out if the rest of the selection did
+        # not also qualify, even though the user was pressing the "Mirror" button in the Align
+        # panel, not "Merge" in Operations. Only a selection that actually qualifies for a merge
+        # takes that path; anything else falls back to Mirror, same as when nothing is LAYER2.
         if not bpy.context.selected_objects:
             return
-        if self.active_material_usage == "LAYER2":
-            if len(bpy.context.selected_objects) != 2:
-                self.report(
-                    {"ERROR"},
-                    "Exactly two LAYER2 items (walls, railings, etc) must be selected to perform a merge.",
-                )
-                return
-            for item in bpy.context.selected_objects:
-                element = tool.Ifc.get_entity(item)
-                if tool.Model.get_usage_type(element) != "LAYER2":
-                    self.report(
-                        {"ERROR"},
-                        "Both selected items must be LAYER2 (walls, railings, etc) to perform a merge.",
-                    )
-                    return
+        if self.active_material_usage == "LAYER2" and self.is_layer2_merge_selection():
             bpy.ops.bim.merge_wall()
+        elif len(bpy.context.selected_objects) == 1:
+            self.report(
+                {"ERROR"},
+                "At least two objects must be selected: an object to be mirrored, and a mirror axis as the active object.",
+            )
         else:
-            if len(bpy.context.selected_objects) == 1:
-                self.report(
-                    {"ERROR"},
-                    "At least two objects must be selected: an object to be mirrored, and a mirror axis as the active object.",
-                )
-            else:
-                bpy.ops.bim.mirror_elements()
+            bpy.ops.bim.mirror_elements()
+
+    @staticmethod
+    def is_layer2_merge_selection() -> bool:
+        selected = bpy.context.selected_objects
+        if len(selected) != 2:
+            return False
+        for item in selected:
+            element = tool.Ifc.get_entity(item)
+            if not element or tool.Model.get_usage_type(element) != "LAYER2":
+                return False
+        return True
 
     def hotkey_S_R(self):
         if not bpy.context.selected_objects:

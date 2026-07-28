@@ -371,10 +371,11 @@ def register():
 
     workspace.load_custom_icons()
 
-    # Global, not tool-scoped: Ctrl+M is Blender's own Mirror shortcut everywhere else, and
-    # BimTool's own Ctrl+M (Merge) only applies while that tool is active in the toolbar. Without
-    # this, Ctrl+M silently falls through to Blender's transform.mirror on an IFC project, which
-    # negatively scales the Blender object without ever touching the IFC representation (#7991).
+    # Global, not tool-scoped. BimTool's own bl_keymap (workspace.py) binds Shift+M, not Ctrl+M,
+    # and only while an authoring tool is active in the toolbar; it never touches this key.
+    # Without this, Ctrl+M falls through to Blender's own transform.mirror on an IFC project,
+    # which negatively scales the Blender object without ever touching the IFC representation
+    # (#7991), regardless of which toolbar tool is active.
     wm = bpy.context.window_manager
     if wm.keyconfigs.addon:
         km = wm.keyconfigs.addon.keymaps.new(name="Object Mode", space_type="EMPTY")
