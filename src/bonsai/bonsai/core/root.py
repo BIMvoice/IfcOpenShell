@@ -47,13 +47,16 @@ def copy_class(
     relating_type = root.get_element_type(new)
     # Only remap the type's geometry when the occurrence actually derives its
     # body from the type. If the occurrence carries its own authored geometry
-    # (has_independent_representation), keep and copy that: some exporters emit
-    # one RepresentationMap per occurrence on the shared type, so remapping
-    # would graft every sibling's geometry onto the copy (issue #7487).
+    # (has_independent_representation) or transforms what it maps
+    # (has_transformed_mapped_representation), keep and copy that instead:
+    # some exporters emit one RepresentationMap per occurrence on the shared
+    # type (issue #7487), and others map a unit shape scaled per occurrence
+    # (issue #7996). Remapping either would graft the wrong geometry onto the copy.
     if (
         relating_type
         and root.does_type_have_representations(relating_type)
         and not root.has_independent_representation(element)
+        and not root.has_transformed_mapped_representation(element)
     ):
         ifc.run("type.map_type_representations", related_object=new, relating_type=relating_type)
         root.link_object_data(ifc.get_object(relating_type), obj)
@@ -64,8 +67,9 @@ def copy_class(
             geometry.copy_data_links(data, copied_entities)
             geometry.change_object_data(obj, data, is_global=True)
             geometry.rename_object(data, geometry.get_representation_name(ifc.get_entity(data)))
-        # Only assign styles if element doesn't get them from material
-        if not root.has_material_styles(new):
+        # Only assign styles if element doesn't get them from material, and never
+        # through a mapped representation, whose items belong to the type.
+        if not root.has_material_styles(new) and not root.has_mapped_representation(new):
             root.assign_body_styles(new, obj)
     collector.assign(obj)
     return new
