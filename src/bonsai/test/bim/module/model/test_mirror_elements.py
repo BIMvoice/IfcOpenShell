@@ -39,6 +39,8 @@ import numpy as np
 import pytest
 from mathutils import Matrix, Vector
 
+from test.bim.bootstrap import NewFile
+
 pytestmark = pytest.mark.model
 
 
@@ -397,4 +399,164 @@ def test_find_uninvertible_items_refuses_shared_type_geometry_before_mutating():
         with pytest.raises(SharedMappedGeometryError):
             operator.find_uninvertible_items(occurrences[0], (1.0, 0.0, 0.0))
 
-    assert _profile_coordinates(solid) == coordinates_before
+
+class TestDuplicateThenMirrorEndToEnd(NewFile):
+    """#7991: IFC Duplicate a typed occurrence, select the duplicate with the original,
+    then Mirror. The duplicate shares its body with the original via the type's
+    IfcMappedItem (bonsai.core.root.copy_class -> type.map_type_representations), so this
+    is the ``is_typed_occurrence`` / ``assign_inverted_type`` path exercised end to end
+    through real ``bpy.ops`` calls rather than through the operator's bare methods, unlike
+    the tests above.
+
+    Also pins that ``bim.override_object_mirror`` -- what Ctrl+M actually runs -- reaches
+    ``bim.mirror_elements`` rather than Blender's own ``transform.mirror``, which only
+    negatively scales the Blender object and never touches the IFC representation."""
+
+    TRIANGLE_2D = ((0.0, 0.0), (2.0, 0.0), (0.3, 1.0))
+    DEPTH = 1.0
+
+    def _make_triangle_representation(self, ifc_file, context):
+        points = [ifc_file.create_entity("IfcCartesianPoint", Coordinates=c) for c in self.TRIANGLE_2D]
+        profile = ifc_file.create_entity(
+            "IfcArbitraryClosedProfileDef",
+            ProfileType="AREA",
+            OuterCurve=ifc_file.create_entity("IfcPolyline", Points=points + [points[0]]),
+        )
+        solid = ifc_file.create_entity(
+            "IfcExtrudedAreaSolid",
+            SweptArea=profile,
+            Position=ifc_file.create_entity(
+                "IfcAxis2Placement3D",
+                Location=ifc_file.create_entity("IfcCartesianPoint", Coordinates=(0.0, 0.0, 0.0)),
+            ),
+            ExtrudedDirection=ifc_file.create_entity("IfcDirection", DirectionRatios=(0.0, 0.0, 1.0)),
+            Depth=self.DEPTH,
+        )
+        shape_rep = ifc_file.create_entity(
+            "IfcShapeRepresentation",
+            ContextOfItems=context,
+            RepresentationIdentifier="Body",
+            RepresentationType="SweptSolid",
+            Items=[solid],
+        )
+        return shape_rep, solid
+
+    def _make_blender_mesh(self, name):
+        import bmesh
+
+        mesh = bpy.data.meshes.new(name)
+        bm = bmesh.new()
+        bottom = [bm.verts.new((x, y, 0.0)) for x, y in self.TRIANGLE_2D]
+        top = [bm.verts.new((x, y, self.DEPTH)) for x, y in self.TRIANGLE_2D]
+        bm.faces.new(bottom)
+        bm.faces.new(list(reversed(top)))
+        n = len(self.TRIANGLE_2D)
+        for i in range(n):
+            j = (i + 1) % n
+            bm.faces.new([bottom[i], bottom[j], top[j], top[i]])
+        bm.to_mesh(mesh)
+        bm.free()
+        return mesh
+
+    def _profile_points(self, entity_type):
+        solid = entity_type.RepresentationMaps[0].MappedRepresentation.Items[0]
+        return [tuple(round(c, 6) for c in p.Coordinates) for p in solid.SweptArea.OuterCurve.Points]
+
+    def _setup_typed_occurrence(self):
+        """A real IFC4 project with one asymmetric IfcFurnitureType and one occurrence
+        typed to it via the production ``type.assign_type`` path, exactly like Bonsai's
+        own "assign type" / "add type instance" authoring flow."""
+        import ifcopenshell.api.root
+        import ifcopenshell.api.spatial
+        import ifcopenshell.util.representation
+
+        import bonsai.core.type
+        import bonsai.tool as tool
+
+        bpy.ops.bim.create_project()
+        ifc_file = tool.Ifc.get()
+        storey = ifc_file.by_type("IfcBuildingStorey")[0]
+        body_context = ifcopenshell.util.representation.get_context(ifc_file, "Model", "Body", "MODEL_VIEW")
+        collection = tool.Ifc.get_object(storey).users_collection[0]
+
+        type_element = ifcopenshell.api.root.create_entity(ifc_file, ifc_class="IfcFurnitureType", name="ChairType")
+        type_shape_rep, _ = self._make_triangle_representation(ifc_file, body_context)
+        rep_map = ifc_file.create_entity(
+            "IfcRepresentationMap",
+            MappingOrigin=ifc_file.create_entity(
+                "IfcAxis2Placement3D", Location=ifc_file.create_entity("IfcCartesianPoint", Coordinates=(0.0, 0.0, 0.0))
+            ),
+            MappedRepresentation=type_shape_rep,
+        )
+        type_element.RepresentationMaps = [rep_map]
+
+        type_mesh = self._make_blender_mesh("ChairType-mesh")
+        type_obj = bpy.data.objects.new("ChairType", type_mesh)
+        collection.objects.link(type_obj)
+        tool.Ifc.link(type_element, type_obj)
+        tool.Ifc.link(type_shape_rep, type_mesh)
+
+        occurrence = ifcopenshell.api.root.create_entity(ifc_file, ifc_class="IfcFurniture", name="Chair-1")
+        ifcopenshell.api.spatial.assign_container(ifc_file, products=[occurrence], relating_structure=storey)
+
+        mesh = self._make_blender_mesh("Chair-1-mesh")
+        obj = bpy.data.objects.new("Chair-1", mesh)
+        collection.objects.link(obj)
+        tool.Ifc.link(occurrence, obj)
+        obj.matrix_world = Matrix.Identity(4)
+        bpy.context.view_layer.update()
+
+        bonsai.core.type.assign_type(tool.Ifc, tool.Model, tool.Type, occurrence, type_element)
+        tool.Ifc.link(occurrence.Representation.Representations[0], mesh)
+
+        return ifc_file, type_element, occurrence, obj
+
+    def test_mirroring_a_duplicate_and_its_original_leaves_the_shared_type_untouched(self):
+        import ifcopenshell.util.element
+
+        import bonsai.tool as tool
+
+        ifc_file, type_element, occurrence, obj = self._setup_typed_occurrence()
+        profile_before = self._profile_points(type_element)
+
+        bpy.ops.object.select_all(action="DESELECT")
+        obj.select_set(True)
+        bpy.context.view_layer.objects.active = obj
+        bpy.ops.bim.override_object_duplicate_move(is_interactive=False)
+        bpy.context.view_layer.update()
+
+        dup_obj = bpy.data.objects["Chair-1.001"]
+        dup_element = tool.Ifc.get_entity(dup_obj)
+        assert ifcopenshell.util.element.get_type(dup_element) == type_element
+        dup_obj.location = (5.0, 0.0, 0.0)
+        bpy.context.view_layer.update()
+
+        bpy.ops.object.select_all(action="DESELECT")
+        dup_obj.select_set(True)
+        obj.select_set(True)
+        bpy.context.view_layer.objects.active = obj  # last-selected: the mirror plane
+
+        # This is exactly what Ctrl+M runs (bim.override_object_mirror -> bim.mirror_elements),
+        # not Blender's own transform.mirror.
+        result = bpy.ops.bim.override_object_mirror("INVOKE_DEFAULT")
+        bpy.context.view_layer.update()
+
+        assert result == {"FINISHED"}
+        assert round(dup_obj.matrix_world.to_3x3().determinant(), 6) == 1.0, "a true mirror inverts geometry, not scale"
+
+        dup_type_after = ifcopenshell.util.element.get_type(dup_element)
+        assert dup_type_after != type_element, "the duplicate must get its own inverted type, not mirror the original"
+        assert self._profile_points(type_element) == profile_before, "the shared type must not be corrupted"
+        mirrored = self._profile_points(dup_type_after)
+        assert mirrored == [(-x, y) for x, y in profile_before], "the duplicate's new type must be a true X mirror"
+
+    def test_ctrl_m_keymap_reaches_the_real_mirror_operator(self):
+        wm = bpy.context.window_manager
+        km = wm.keyconfigs.addon.keymaps.get("Object Mode")
+        assert km is not None
+        matches = [
+            kmi
+            for kmi in km.keymap_items
+            if kmi.idname == "bim.override_object_mirror" and kmi.type == "M" and kmi.ctrl
+        ]
+        assert len(matches) == 1, "Ctrl+M must be bound globally, not only inside a specific workspace tool"

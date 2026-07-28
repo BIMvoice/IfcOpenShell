@@ -1244,6 +1244,35 @@ class MirrorElements(bpy.types.Operator, tool.Ifc.Operator):
         bonsai.core.type.assign_type(tool.Ifc, tool.Model, tool.Type, element, inverted_type)
 
 
+class OverrideObjectMirror(bpy.types.Operator):
+    bl_idname = "bim.override_object_mirror"
+    bl_label = "Mirror"
+    bl_options = {"REGISTER"}
+    bl_description = (
+        "Mirrors the selection. Bound globally to Ctrl+M, matching Blender's own Mirror shortcut, "
+        "since every other Blender workflow reaches for that key. On an IFC project this runs "
+        "bim.mirror_elements, which inverts the actual IFC geometry and keeps it in sync. Without "
+        "an IFC project loaded this falls back to Blender's own transform.mirror unchanged.\n\n"
+        "Blender's transform.mirror only negatively scales the Blender object: it never touches "
+        "the IFC representation, so on an IFC project it looks mirrored in the viewport but the "
+        "geometry was never actually inverted and the change is not saved to the IFC file."
+    )
+
+    @classmethod
+    def poll(cls, context):
+        return bool(context.selected_objects)
+
+    def invoke(self, context, event):
+        if tool.Ifc.get() is None:
+            return bpy.ops.transform.mirror("INVOKE_DEFAULT")
+        return bpy.ops.bim.mirror_elements("INVOKE_DEFAULT")
+
+    def execute(self, context):
+        if tool.Ifc.get() is None:
+            return bpy.ops.transform.mirror("EXEC_DEFAULT")
+        return bpy.ops.bim.mirror_elements("EXEC_DEFAULT")
+
+
 def generate_box(usecase_path: str, ifc_file: ifcopenshell.file, settings: dict[str, Any]) -> None:
     box_context = ifcopenshell.util.representation.get_context(ifc_file, "Model", "Box", "MODEL_VIEW")
     if not box_context:

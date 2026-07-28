@@ -83,6 +83,7 @@ classes = (
     product.DrawOccurrence,
     product.LoadTypeThumbnails,
     product.MirrorElements,
+    product.OverrideObjectMirror,
     product.SetActiveType,
     workspace.Hotkey,
     workspace.BIM_MT_add_representation_item,
@@ -370,6 +371,16 @@ def register():
 
     workspace.load_custom_icons()
 
+    # Global, not tool-scoped: Ctrl+M is Blender's own Mirror shortcut everywhere else, and
+    # BimTool's own Ctrl+M (Merge) only applies while that tool is active in the toolbar. Without
+    # this, Ctrl+M silently falls through to Blender's transform.mirror on an IFC project, which
+    # negatively scales the Blender object without ever touching the IFC representation (#7991).
+    wm = bpy.context.window_manager
+    if wm.keyconfigs.addon:
+        km = wm.keyconfigs.addon.keymaps.new(name="Object Mode", space_type="EMPTY")
+        kmi = km.keymap_items.new("bim.override_object_mirror", "M", "PRESS", ctrl=True)
+        addon_keymaps.append((km, kmi))
+
 
 def unregister():
     # DecorationsHandler is installed lazily by bim.show_openings; tear it down
@@ -386,6 +397,13 @@ def unregister():
     if not bpy.app.background:
         for tool_data in reversed(tools):
             bpy.utils.unregister_tool(tool_data.tool)
+
+    wm = bpy.context.window_manager
+    kc = wm.keyconfigs.addon
+    if kc:
+        for km, kmi in addon_keymaps:
+            km.keymap_items.remove(kmi)
+    addon_keymaps.clear()
 
     del bpy.types.Scene.BIMModelProperties
     del bpy.types.Scene.BIMPolylineProperties
