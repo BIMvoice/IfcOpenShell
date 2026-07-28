@@ -758,6 +758,22 @@ class CreateDrawing(bpy.types.Operator):
                 path.attrib["d"] = d
             group.append(g)
 
+    @staticmethod
+    def get_material_layer_bisect_axes(
+        usage: Optional[ifcopenshell.entity_instance], offset: float, extrusion_vector: Vector
+    ) -> tuple[Vector, Vector]:
+        if not usage:
+            return Vector((0.0, 0.0, offset)), extrusion_vector
+        direction = usage.LayerSetDirection
+        if direction == "AXIS2":
+            return Vector((0.0, offset, 0.0)), extrusion_vector.cross(Vector((1.0, 0.0, 0.0)))
+        elif direction == "AXIS3":
+            return Vector((0.0, 0.0, offset)), Vector((0.0, 0.0, 1.0))
+        elif direction == "AXIS1":
+            return Vector((offset, 0.0, 0.0)), Vector((1.0, 0.0, 0.0))
+        else:
+            assert False, usage
+
     def generate_material_layers(self, context: bpy.types.Context, root) -> None:
         for el in root.findall(".//{http://www.w3.org/2000/svg}g[@{http://www.ifcopenshell.org/ns}guid]"):
             if "projection" in el.get("class", "").split():
@@ -810,22 +826,8 @@ class CreateDrawing(bpy.types.Operator):
 
             if not usage:
                 sense_factor = 1  # Assume the extrusion vector points in the direction sense
-                no = tool.Drawing.get_extrusion_vector(element).normalized()
-                co = Vector((0.0, 0.0, offset))
-            elif usage.LayerSetDirection == "AXIS2":
-                co = Vector((0.0, offset, 0.0))
-                no = tool.Drawing.get_extrusion_vector(element).normalized()
-                no = no.cross(Vector([1.0, 0.0, 0.0]))
-            elif usage.LayerSetDirection == "AXIS3":
-                co = Vector((0.0, 0.0, offset))
-                no = tool.Drawing.get_extrusion_vector(element).normalized()
-                no = Vector([0.0, 0.0, 1.0])
-            elif usage.LayerSetDirection == "AXIS1":
-                co = Vector((0.0, 0.0, offset))
-                no = tool.Drawing.get_extrusion_vector(element).normalized()
-                no = Vector([1.0, 0.0, 0.0])
-            else:
-                assert False, usage
+            extrusion_vector = tool.Drawing.get_extrusion_vector(element).normalized()
+            co, no = self.get_material_layer_bisect_axes(usage, offset, extrusion_vector)
             no *= sense_factor
             last_i = len(layer_set.MaterialLayers) - 1
             for i, layer in enumerate(layer_set.MaterialLayers):
