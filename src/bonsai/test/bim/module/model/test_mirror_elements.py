@@ -897,3 +897,28 @@ class TestDuplicateThenMirrorEndToEnd(NewFile):
             if kmi.idname == "bim.override_object_mirror" and kmi.type == "M" and kmi.ctrl
         ]
         assert len(matches) == 1, "Ctrl+M must be bound globally, not only inside a specific workspace tool"
+
+    def test_object_menu_offers_the_ifc_mirror_alongside_the_other_overrides(self):
+        # Blender's own Object > Mirror submenu runs transform.mirror, which moves an IFC
+        # element without inverting its representation (#7991). Bonsai already lists its
+        # IFC-aware Duplicate, Delete and Paste there; Mirror has to be reachable the same way
+        # for anyone who reaches for the menu rather than Ctrl+M.
+        import bonsai.bim.module.geometry.ui
+
+        class Probe:
+            def __init__(self):
+                self.operators = []
+
+            def operator(self, idname, **kwargs):
+                self.operators.append(idname)
+                return self
+
+            def menu(self, idname, **kwargs):
+                return self
+
+            def separator(self, **kwargs):
+                pass
+
+        probe = Probe()
+        bonsai.bim.module.geometry.ui.object_menu(SimpleNamespace(layout=probe), bpy.context)
+        assert "bim.override_object_mirror" in probe.operators

@@ -1331,7 +1331,7 @@ class MirrorElements(bpy.types.Operator, tool.Ifc.Operator):
 
 class OverrideObjectMirror(bpy.types.Operator):
     bl_idname = "bim.override_object_mirror"
-    bl_label = "Mirror"
+    bl_label = "IFC Mirror"
     bl_options = {"REGISTER"}
     bl_description = (
         "Mirrors the selection. Bound globally to Ctrl+M, matching Blender's own Mirror shortcut, "
