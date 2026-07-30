@@ -123,10 +123,10 @@ class BIM_PT_pset_template(Panel):
                         op.index = k
 
             else:
-                row.label(text=prop_template["Name"])
-                row.label(text=prop_template["Description"])
-                row.label(text=prop_template["PrimaryMeasureType"])
-                row.label(text=prop_template["TemplateType"])
+                row.label(text=prop_template["Name"] or "Unnamed")
+                row.label(text=prop_template["Description"] or "")
+                row.label(text=prop_template["PrimaryMeasureType"] or "")
+                row.label(text=prop_template["TemplateType"] or "")
 
             if self.props.active_prop_template_id and self.props.active_prop_template_id == prop_template["id"]:
                 op = row.operator("bim.edit_prop_template", icon="CHECKMARK", text="")
