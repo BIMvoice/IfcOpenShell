@@ -129,7 +129,7 @@ class OrganisationsData(RolesAddressesData):
             organisations.append(
                 {
                     "id": organisation.id(),
-                    "name": organisation.Name,
+                    "name": organisation.Name or "Unnamed",
                     "roles_label": ", ".join([r["label"] for r in roles]),
                     "is_engaged": bool(organisation.Engages),
                     "roles": roles,
