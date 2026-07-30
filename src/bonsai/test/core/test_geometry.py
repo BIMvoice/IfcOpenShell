@@ -208,6 +208,25 @@ class TestSwitchRepresentation:
         )
 
 
+class TestSwitchRepresentationBatched:
+    def test_batching_multiple_objects_into_one_reimport_call(self, ifc, geometry):
+        geometry.get_object_data("obj1").should_be_called().will_return("data1")
+        ifc.get_entity("obj1").should_be_called().will_return("element1")
+        geometry.clear_cache("element1").should_be_called()
+        geometry.get_object_data("obj2").should_be_called().will_return("data2")
+        ifc.get_entity("obj2").should_be_called().will_return("element2")
+        geometry.clear_cache("element2").should_be_called()
+        geometry.reimport_element_representations_batched(
+            [("obj1", "rep1"), ("obj2", "rep2")], apply_openings=True
+        ).should_be_called()
+        subject.switch_representation_batched(
+            ifc,
+            geometry,
+            obj_representations=[("obj1", "rep1"), ("obj2", "rep2")],
+            apply_openings=True,
+        )
+
+
 class TestGetRepresentationIfcParameters:
     def test_run(self, geometry):
         geometry.get_object_data("obj").should_be_called().will_return("data")

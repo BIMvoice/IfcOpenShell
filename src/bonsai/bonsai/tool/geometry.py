@@ -125,7 +125,7 @@ class Geometry(bonsai.core.tool.Geometry):
         try:
             cache = get_cache_or_detect_lock()
         except Exception as exc:
-            print(f"clear_cache: skipping cache invalidation for {element} ({exc})")
+            logging.getLogger("ImportIFC").warning("clear_cache: skipping cache invalidation for %s (%s)", element, exc)
             return
         if cache and hasattr(element, "GlobalId"):
             cache.remove(element.GlobalId)
@@ -1074,21 +1074,21 @@ class Geometry(bonsai.core.tool.Geometry):
     def reimport_element_representations(
         cls, obj: bpy.types.Object, representation: ifcopenshell.entity_instance, apply_openings: bool = True
     ) -> None:
-        element = tool.Ifc.get_entity(obj)
-        assert element
+        cls.reimport_element_representations_batched([(obj, representation)], apply_openings=apply_openings)
 
+    @classmethod
+    def reimport_element_representations_batched(
+        cls,
+        obj_representations: list[tuple[bpy.types.Object, ifcopenshell.entity_instance]],
+        apply_openings: bool = True,
+    ) -> None:
+        """Reimport several representations in one pass.
+
+        Requests that resolve to the same ``IfcGeometricRepresentationContext``
+        share a single ``ifcopenshell.geom.iterator``, instead of paying its
+        fixed per-call setup cost once per representation.
+        """
         ifc_file = tool.Ifc.get()
-        elements: set[ifcopenshell.entity_instance] = set()
-        element_types: set[ifcopenshell.entity_instance] = set()
-        representation = ifcopenshell.util.representation.resolve_representation(representation)
-        context = representation.ContextOfItems
-        for mapped_element in ifcopenshell.util.element.get_elements_by_representation(tool.Ifc.get(), representation):
-            if mapped_element.is_a("IfcTypeProduct"):
-                element_types.add(mapped_element)
-            else:
-                elements.add(mapped_element)
-                if element_type := ifcopenshell.util.element.get_type(mapped_element):
-                    element_types.add(element_type)
 
         def change_data(obj: bpy.types.Object, element: ifcopenshell.entity_instance, data: bpy.types.ID) -> None:
             old_data = obj.data
@@ -1102,45 +1102,77 @@ class Geometry(bonsai.core.tool.Geometry):
             cls.clear_modifiers(obj)
             cls.clear_cache(element)
 
-        # Import swept disk solids as Blender curves if possible.
-        elements_without_openings = {e for e in elements if not getattr(e, "HasOpenings", False)}
-        curve, curve_thickness = None, None
-        for element_ in elements_without_openings | element_types:
-            if not tool.Loader.is_native_swept_disk_solid(element, representation):
+        groups: dict[int, list[dict[str, Any]]] = {}
+
+        for request_obj, request_representation in obj_representations:
+            element = tool.Ifc.get_entity(request_obj)
+            assert element
+
+            elements: set[ifcopenshell.entity_instance] = set()
+            element_types: set[ifcopenshell.entity_instance] = set()
+            representation = ifcopenshell.util.representation.resolve_representation(request_representation)
+            context = representation.ContextOfItems
+            for mapped_element in ifcopenshell.util.element.get_elements_by_representation(
+                tool.Ifc.get(), representation
+            ):
+                if mapped_element.is_a("IfcTypeProduct"):
+                    element_types.add(mapped_element)
+                else:
+                    elements.add(mapped_element)
+                    if element_type := ifcopenshell.util.element.get_type(mapped_element):
+                        element_types.add(element_type)
+
+            # Import swept disk solids as Blender curves if possible.
+            elements_without_openings = {e for e in elements if not getattr(e, "HasOpenings", False)}
+            curve, curve_thickness = None, None
+            for element_ in elements_without_openings | element_types:
+                if not tool.Loader.is_native_swept_disk_solid(element, representation):
+                    continue
+                if curve is None:
+                    mesh_name = tool.Loader.get_mesh_name(representation)
+                    native_data = {
+                        "representation": representation,
+                        # TODO: calculate mapped item matrix.
+                        "matrix": np.eye(4),
+                    }
+                    curve, curve_thickness = tool.Loader.create_native_swept_disk_solid(element, mesh_name, native_data)
+                    tool.Ifc.link(representation, curve)
+                curve_obj = tool.Ifc.get_object(element)
+                change_data(curve_obj, element, curve)
+                tool.Loader.setup_native_swept_disk_solid_thickness(curve_obj, curve_thickness)
+                elements.discard(element_)
+                element_types.discard(element_)
+
+            if not elements and not element_types:
                 continue
-            if curve is None:
-                mesh_name = tool.Loader.get_mesh_name(representation)
-                native_data = {
+
+            # Fallback to custom methods as IOS doesn't process points, see #5218.
+            representation_type = representation.RepresentationType
+            if representation_type in ("PointCloud", "Point", "Vertex"):
+                if representation_type == "Vertex":
+                    mesh = tool.Loader.create_structural_point_connection_mesh(representation)
+                else:
+                    mesh = tool.Loader.create_point_cloud_mesh(representation)
+
+                if mesh is None:
+                    raise Exception(f"Failed to process representation with custom method: {representation}.")
+
+                tool.Ifc.link(representation, mesh)
+                for point_element in elements | element_types:
+                    point_obj = tool.Ifc.get_object(point_element)
+                    change_data(point_obj, point_element, mesh)
+                continue
+
+            groups.setdefault(context.id(), []).append(
+                {
                     "representation": representation,
-                    # TODO: calculate mapped item matrix.
-                    "matrix": np.eye(4),
+                    "context": context,
+                    "elements": elements,
+                    "element_types": element_types,
                 }
-                curve, curve_thickness = tool.Loader.create_native_swept_disk_solid(element, mesh_name, native_data)
-                tool.Ifc.link(representation, curve)
-            obj = tool.Ifc.get_object(element)
-            change_data(obj, element, curve)
-            tool.Loader.setup_native_swept_disk_solid_thickness(obj, curve_thickness)
-            elements.discard(element_)
-            element_types.discard(element_)
+            )
 
-        if not elements and not element_types:
-            return
-
-        # Fallback to custom methods as IOS doesn't process points, see #5218.
-        representation_type = representation.RepresentationType
-        if representation_type in ("PointCloud", "Point", "Vertex"):
-            if representation_type == "Vertex":
-                mesh = tool.Loader.create_structural_point_connection_mesh(representation)
-            else:
-                mesh = tool.Loader.create_point_cloud_mesh(representation)
-
-            if mesh is None:
-                raise Exception(f"Failed to process representation with custom method: {representation}.")
-
-            tool.Ifc.link(representation, mesh)
-            for element in elements | element_types:
-                obj = tool.Ifc.get_object(element)
-                change_data(obj, element, mesh)
+        if not groups:
             return
 
         logger = logging.getLogger("ImportIFC")
@@ -1153,98 +1185,111 @@ class Geometry(bonsai.core.tool.Geometry):
         settings.set("dimensionality", ifcopenshell.ifcopenshell_wrapper.CURVES_SURFACES_AND_SOLIDS)
         settings.set("mesher-linear-deflection", ifc_import_settings.deflection_tolerance)
         settings.set("mesher-angular-deflection", ifc_import_settings.angular_tolerance)
+        settings.set("disable-opening-subtractions", not apply_openings)
         geometry_library = ifc_import_settings.geometry_library
 
         ifc_importer = bonsai.bim.import_ifc.IfcImporter(ifc_import_settings)
         ifc_importer.file = tool.Ifc.get()
 
-        settings.set("context-ids", [context.id()])
-        if not apply_openings:
-            settings.set("disable-opening-subtractions", True)
+        for context_id, requests in groups.items():
+            settings.set("context-ids", [context_id])
 
-        shape = None
-        if elements:
-            iterator = ifcopenshell.geom.iterator(
-                settings,
-                tool.Ifc.get(),
-                multiprocessing.cpu_count(),
-                include=elements,
-                geometry_library=geometry_library,
-            )
-        else:
-            iterator = None  # For example, when switching representation of a type with no occurrences
-        meshes = {}
-        base_representation = representation
-        if iterator and iterator.initialize():
-            while True:
-                shape = iterator.get()
-                assert isinstance(shape, W.TriangulationElement)
-                element = tool.Ifc.get().by_id(shape.id)
+            union_elements: set[ifcopenshell.entity_instance] = set()
+            union_element_types: set[ifcopenshell.entity_instance] = set()
+            rep_map: dict[int, dict[str, Any]] = {}
+            group_context = requests[0]["context"]
+            for request in requests:
+                union_elements |= request["elements"]
+                union_element_types |= request["element_types"]
+                rep_map[request["representation"].id()] = request
+
+            shape = None
+            if union_elements:
+                iterator = ifcopenshell.geom.iterator(
+                    settings,
+                    tool.Ifc.get(),
+                    multiprocessing.cpu_count(),
+                    include=union_elements,
+                    geometry_library=geometry_library,
+                )
+            else:
+                iterator = None  # For example, when switching representation of a type with no occurrences
+            meshes: dict[str, bpy.types.ID] = {}
+            if iterator and iterator.initialize():
+                while True:
+                    shape = iterator.get()
+                    assert isinstance(shape, W.TriangulationElement)
+                    element = tool.Ifc.get().by_id(shape.id)
+                    if obj := tool.Ifc.get_object(element):
+                        # It's possible that there will be multiple shapes for the same context,
+                        # Unfortunately, iterator still processes them all and
+                        # we need to ensure we pick the one that was requested for reimport.
+                        representation_id = tool.Loader.get_representation_id_from_shape(shape.geometry)
+                        shape_representation = ifc_file.by_id(representation_id)
+                        resolved_representation = ifcopenshell.util.representation.resolve_representation(
+                            shape_representation
+                        )
+                        request = rep_map.get(resolved_representation.id())
+                        if request is None:
+                            if not iterator.next():
+                                break
+                            continue
+
+                        mesh_name = tool.Loader.get_mesh_name_from_shape(shape.geometry)
+                        mesh = meshes.get(mesh_name)
+                        if mesh is None:
+                            if element.is_a("IfcAnnotation") and element.ObjectType == "DRAWING":
+                                mesh = tool.Loader.create_camera(element, shape_representation, shape)
+                            elif element.is_a("IfcAnnotation") and ifc_importer.is_curve_annotation(element):
+                                mesh = ifc_importer.create_curve(element, shape)
+                            elif shape:
+                                cartesian_point_offset = cls.get_cartesian_point_offset(obj)
+                                if cartesian_point_offset is None:
+                                    cartesian_point_offset = False
+                                mesh = ifc_importer.create_mesh(
+                                    element, shape, cartesian_point_offset=cartesian_point_offset
+                                )
+                                ifc_importer.material_creator.load_existing_materials()
+                                shape_has_openings = cls.does_shape_has_openings(shape)
+                                ifc_importer.material_creator.create(element, obj, mesh, shape_has_openings)
+                                mprops = tool.Geometry.get_mesh_props(mesh)
+                                mprops.has_openings_applied = apply_openings
+                                if not shape_has_openings:
+                                    tool.Loader.load_indexed_colour_map(shape_representation, mesh)
+                            tool.Loader.link_mesh(shape, mesh)
+                            meshes[mesh_name] = mesh
+
+                        change_data(obj, element, mesh)
+
+                    if not iterator.next():
+                        break
+
+            for element in union_element_types:
                 if obj := tool.Ifc.get_object(element):
-                    # It's possible that there will be multiple shapes for the same context,
-                    # Unfortunately, iterator still processes them all and
-                    # we need to ensure we pick the one that was requested for reimport.
-                    representation_id = tool.Loader.get_representation_id_from_shape(shape.geometry)
-                    representation = ifc_file.by_id(representation_id)
-                    resolved_representation = ifcopenshell.util.representation.resolve_representation(representation)
-                    if resolved_representation != base_representation:
-                        if not iterator.next():
-                            break
-                        continue
+                    if type_representation := ifcopenshell.util.representation.get_representation(
+                        element, group_context
+                    ):
+                        geometry = ifcopenshell.geom.create_shape(
+                            settings, type_representation, geometry_library=geometry_library
+                        )
+                        mesh_name = tool.Loader.get_mesh_name_from_shape(geometry)
+                        mesh = meshes.get(mesh_name)
+                        if mesh is None:
+                            # Duplicate code
+                            type_representation = tool.Ifc.get().by_id(int(geometry.id.split("-")[0]))
+                            if geometry:
+                                mesh = ifc_importer.create_mesh(element, geometry)
+                                tool.Loader.link_mesh(geometry, mesh)
+                                ifc_importer.material_creator.load_existing_materials()
+                                shape_has_openings = False
+                                ifc_importer.material_creator.create(element, obj, mesh, shape_has_openings)
+                                mprops = tool.Geometry.get_mesh_props(mesh)
+                                mprops.has_openings_applied = apply_openings
+                                if not shape_has_openings:
+                                    tool.Loader.load_indexed_colour_map(type_representation, mesh)
+                            meshes[mesh_name] = mesh
 
-                    mesh_name = tool.Loader.get_mesh_name_from_shape(shape.geometry)
-                    mesh = meshes.get(mesh_name)
-                    if mesh is None:
-                        if element.is_a("IfcAnnotation") and element.ObjectType == "DRAWING":
-                            mesh = tool.Loader.create_camera(element, representation, shape)
-                        elif element.is_a("IfcAnnotation") and ifc_importer.is_curve_annotation(element):
-                            mesh = ifc_importer.create_curve(element, shape)
-                        elif shape:
-                            cartesian_point_offset = cls.get_cartesian_point_offset(obj)
-                            if cartesian_point_offset is None:
-                                cartesian_point_offset = False
-                            mesh = ifc_importer.create_mesh(
-                                element, shape, cartesian_point_offset=cartesian_point_offset
-                            )
-                            ifc_importer.material_creator.load_existing_materials()
-                            shape_has_openings = cls.does_shape_has_openings(shape)
-                            ifc_importer.material_creator.create(element, obj, mesh, shape_has_openings)
-                            mprops = tool.Geometry.get_mesh_props(mesh)
-                            mprops.has_openings_applied = apply_openings
-                            if not shape_has_openings:
-                                tool.Loader.load_indexed_colour_map(representation, mesh)
-                        tool.Loader.link_mesh(shape, mesh)
-                        meshes[mesh_name] = mesh
-
-                    change_data(obj, element, mesh)
-
-                if not iterator.next():
-                    break
-
-        for element in element_types:
-            if obj := tool.Ifc.get_object(element):
-                if representation := ifcopenshell.util.representation.get_representation(element, context):
-                    geometry = ifcopenshell.geom.create_shape(
-                        settings, representation, geometry_library=geometry_library
-                    )
-                    mesh_name = tool.Loader.get_mesh_name_from_shape(geometry)
-                    mesh = meshes.get(mesh_name)
-                    if mesh is None:
-                        # Duplicate code
-                        representation = tool.Ifc.get().by_id(int(geometry.id.split("-")[0]))
-                        if geometry:
-                            mesh = ifc_importer.create_mesh(element, geometry)
-                            tool.Loader.link_mesh(geometry, mesh)
-                            ifc_importer.material_creator.load_existing_materials()
-                            shape_has_openings = False
-                            ifc_importer.material_creator.create(element, obj, mesh, shape_has_openings)
-                            mprops = tool.Geometry.get_mesh_props(mesh)
-                            mprops.has_openings_applied = apply_openings
-                            if not shape_has_openings:
-                                tool.Loader.load_indexed_colour_map(representation, mesh)
-                        meshes[mesh_name] = mesh
-
-                    change_data(obj, element, mesh)
+                        change_data(obj, element, mesh)
 
     @classmethod
     def does_shape_has_openings(

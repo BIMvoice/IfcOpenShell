@@ -483,6 +483,7 @@ class Geometry:
     def record_object_position(cls, obj): pass
     def recreate_object_with_data(cls, obj, data): pass
     def reimport_element_representations(cls, obj, representation, apply_openings=True): pass
+    def reimport_element_representations_batched(cls, obj_representations, apply_openings=True): pass
     def remove_connection(cls, connection): pass
     def rename_object(cls, obj, name): pass
     def replace_object_data_globally(cls, old_data, new_data): pass

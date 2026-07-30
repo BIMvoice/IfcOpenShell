@@ -129,6 +129,32 @@ def switch_representation(
     geometry.reimport_element_representations(obj, representation, apply_openings=apply_openings)
 
 
+def switch_representation_batched(
+    ifc: type[tool.Ifc],
+    geometry: type[tool.Geometry],
+    obj_representations: Sequence[tuple[bpy.types.Object, ifcopenshell.entity_instance]],
+    apply_openings: bool = True,
+) -> None:
+    """Batched ``switch_representation`` for many objects at once.
+
+    Shares a single reimport pass per IFC context instead of one per object,
+    see #5696.
+    """
+    filtered: list[tuple[bpy.types.Object, ifcopenshell.entity_instance]] = []
+    for obj, representation in obj_representations:
+        if not geometry.get_object_data(obj) and geometry.is_text_literal(representation):
+            continue
+        element = ifc.get_entity(obj)
+        assert element
+        geometry.clear_cache(element)
+        filtered.append((obj, representation))
+
+    if not filtered:
+        return
+
+    geometry.reimport_element_representations_batched(filtered, apply_openings=apply_openings)
+
+
 def get_representation_ifc_parameters(geometry: type[tool.Geometry], obj: bpy.types.Object) -> None:
     geometry.import_representation_parameters(geometry.get_object_data(obj))
 
