@@ -315,7 +315,9 @@ class CostSchedulesData:
         if not ifc_id:
             return results
         for quantity in tool.Ifc.get().by_id(ifc_id).CostQuantities or []:
-            results.append({"id": quantity.id(), "name": quantity.Name, "value": "{0:.2f}".format(quantity[3])})
+            results.append(
+                {"id": quantity.id(), "name": quantity.Name or "Unnamed", "value": "{0:.2f}".format(quantity[3])}
+            )
         return results
 
     @classmethod
