@@ -195,7 +195,7 @@ class settings_mixin:
             if v:
                 self.set_("iterator-output", ifcopenshell_wrapper.SERIALIZED)
                 self.set_("use-world-coords", True)
-                self.use_python_opencascade = True
+            self.use_python_opencascade = bool(v)
         else:
             self.set_(self.name(k), v)
 
