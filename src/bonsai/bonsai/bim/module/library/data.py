@@ -43,7 +43,7 @@ class LibrariesData:
     def libraries(cls):
         results = []
         for library in tool.Ifc.get().by_type("IfcLibraryInformation"):
-            results.append({"id": library.id(), "name": library.Name})
+            results.append({"id": library.id(), "name": library.Name or "Unnamed"})
         return results
 
     @classmethod
