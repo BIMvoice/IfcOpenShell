@@ -72,7 +72,7 @@ class SystemData:
         active_system = tool.System.get_active_system()
         if not active_system:
             return None
-        return {"id": active_system.id(), "Name": active_system.Name, "ifc_class": active_system.is_a()}
+        return {"id": active_system.id(), "Name": active_system.Name or "Unnamed", "ifc_class": active_system.is_a()}
 
 
 class ObjectSystemData:
