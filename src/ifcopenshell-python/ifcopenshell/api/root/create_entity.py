@@ -112,7 +112,7 @@ class Usecase:
 
         if element.is_a("IfcSpatialStructureElement"):
             element.CompositionType = "ELEMENT"
-        elif element.is_a("IfcRoof"):
+        elif element.is_a("IfcRoof") or element.is_a("IfcRamp") or element.is_a("IfcStair"):
             element.ShapeType = "NOTDEFINED"
         elif element.is_a("IfcFurnitureType"):
             element.AssemblyPlace = "NOTDEFINED"
@@ -121,6 +121,17 @@ class Usecase:
             element.ConstructionType = "NOTDEFINED"
             element.ParameterTakesPrecedence = False
             element.Sizeable = False
+        elif (
+            element.is_a("IfcElementAssembly")
+            or element.is_a("IfcFooting")
+            or element.is_a("IfcOccupant")
+            or element.is_a("IfcPile")
+            or element.is_a("IfcTendon")
+        ):
+            if hasattr(element, "PredefinedType") and not element.PredefinedType:
+                element.PredefinedType = "NOTDEFINED"
+        elif element.is_a("IfcStructuralAction"):
+            element.DestabilizingLoad = False
 
     def handle_4_defaults(self, element: ifcopenshell.entity_instance) -> None:
         if element.is_a("IfcElementType"):
