@@ -101,7 +101,7 @@ def test_with_default_names(default_names_alignment):
 
     expected = ["P.O.B", "P.C.", "P.T.", "P.O.E.", "V.P.O.B.", "P.V.C.", "P.V.T.", "V.P.O.E"]
     for r in referent_nest.RelatedObjects:
-        assert [x in r.Name for x in expected]
+        assert any(x in r.Name for x in expected), f"none of {expected} found in {r.Name!r}"
 
 
 def test_with_callbacks(callback_alignment):
@@ -109,4 +109,4 @@ def test_with_callbacks(callback_alignment):
 
     expected = ["A", "Q", "Z", "a", "q", "z"]
     for r in referent_nest.RelatedObjects:
-        assert [x in r.Name for x in expected]
+        assert any(x in r.Name for x in expected), f"none of {expected} found in {r.Name!r}"
