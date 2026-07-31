@@ -82,7 +82,8 @@ class Data:
         version = tool.Ifc.get_schema()
         for pset in psets:
             doc = ifcopenshell.util.doc.get_property_set_doc(version, pset.Name) or {}
-            enum_items.append((pset.Name, pset.Name, doc.get("description", "")))
+            name = pset.Name or "Unnamed"
+            enum_items.append((name, name, doc.get("description", "")))
         return enum_items
 
 
