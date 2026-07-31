@@ -127,6 +127,17 @@ class Patcher:
 
             else:
                 info_to_id[info] = id
-                instance_mapping[inst] = self.optimized_file.create_entity(inst.is_a(), *map(map_value, inst))
+                # Some files leave a mandatory attribute unset (schema
+                # validation is not enforced on read), which create_entity()
+                # would reject if passed positionally. Skip None values
+                # instead, matching the already-unset default on a fresh
+                # entity, so a non-compliant but parseable file still
+                # optimises instead of crashing.
+                new_inst = self.optimized_file.create_entity(inst.is_a())
+                for idx, value in enumerate(map(map_value, inst)):
+                    if value is None:
+                        continue
+                    new_inst[idx] = value
+                instance_mapping[inst] = new_inst
 
         self.file = self.optimized_file
