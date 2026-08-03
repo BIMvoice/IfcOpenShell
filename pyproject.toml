@@ -11,7 +11,7 @@ include = '''
     |nix/.*.pyi?$
     |pyodide/.*.pyi?$
 '''
-extend-exclude = '''
+force-exclude = '''
     src/ifcopenshell-python/ifcopenshell/express/rules/*
     |src/ifcopenshell-python/ifcopenshell/express/express_parser.py
     |src/ifcopenshell-python/ifcopenshell/mvd/*
