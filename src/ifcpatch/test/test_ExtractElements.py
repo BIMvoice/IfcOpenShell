@@ -16,6 +16,7 @@
 # You should have received a copy of the GNU Lesser General Public License
 # along with IfcOpenShell.  If not, see <http://www.gnu.org/licenses/>.
 
+import importlib
 import os
 
 import ifcopenshell
@@ -62,6 +63,43 @@ class TestExtractElements(test.bootstrap.IFC4):
         rels = output.by_type("IfcRelAssociatesMaterial")
         assert len(rels) == 1
         assert {w.GlobalId for w in rels[0].RelatedObjects} == {w.GlobalId for w in walls}
+
+    def test_a_shared_relationship_is_walked_once_not_once_per_element(self):
+        # Pins the algorithmic behaviour behind the deferred member lists, not just
+        # its output. append_asset inspects every member of a relationship it
+        # reaches through a whitelisted inverse, one is_another_asset call per
+        # member. A relationship shared by n extracted elements must have its
+        # member tuple walked once in total, not once per element, or extraction
+        # is quadratic: 40 walls sharing one IfcRelAssociatesMaterial cost 1640
+        # calls before this was fixed and 41 after.
+        n = 40
+        ifcopenshell.api.root.create_entity(self.file, ifc_class="IfcProject")
+        ifcopenshell.api.context.add_context(self.file, context_type="Model")
+        material = ifcopenshell.api.material.add_material(self.file, name="Steel")
+        walls = [ifcopenshell.api.root.create_entity(self.file, ifc_class="IfcWall") for _ in range(n)]
+        ifcopenshell.api.material.assign_material(self.file, products=walls, material=material)
+
+        # wrap_usecases rebinds the package attribute to the function, so the
+        # module holding Usecase has to be imported rather than attribute-accessed.
+        module = importlib.import_module("ifcopenshell.api.project.append_asset")
+        original = module.Usecase.is_another_asset
+        calls = 0
+
+        def counting_is_another_asset(usecase, element):
+            nonlocal calls
+            calls += 1
+            return original(usecase, element)
+
+        module.Usecase.is_another_asset = counting_is_another_asset
+        try:
+            output = ifcpatch.execute({"file": self.file, "recipe": "ExtractElements", "arguments": ["IfcWall"]})
+        finally:
+            module.Usecase.is_another_asset = original
+
+        rels = output.by_type("IfcRelAssociatesMaterial")
+        assert len(rels) == 1
+        assert {w.GlobalId for w in rels[0].RelatedObjects} == {w.GlobalId for w in walls}
+        assert calls <= 2 * n, f"shared relationship walked once per element: {calls} calls for {n} elements"
 
     def test_relationship_members_outside_the_query_are_preserved(self):
         # Regression test: spatial containers, decomposition parents and element
