@@ -40,6 +40,7 @@ Also see how to `create a simple model from scratch
 
 import importlib
 import inspect
+import itertools
 import json
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Optional
@@ -230,9 +231,55 @@ def extract_docs(module: str, usecase: str) -> dict[str, Any]:
     return node_data
 
 
+MAX_SERIALISED_ITEMS = 10
+"""How many items of a container setting are described by :func:`serialise_settings`."""
+
+MAX_SERIALISED_CHARS = 1000
+"""How many characters of a single non-container setting :func:`serialise_settings` keeps."""
+
+
 def serialise_settings(settings):
+    """Describe API call arguments for a debug log, in bounded time and size.
+
+    This runs on every API call in applications that register a wildcard
+    listener (Bonsai does), so it must never scale with the size of an
+    argument. Containers are summarised by their length and a sample of
+    ``MAX_SERIALISED_ITEMS`` items rather than stringified in full: arguments
+    such as ``append_asset``'s ``reuse_identities`` hold one entry per appended
+    entity, and ``repr()``-ing every entry on every call is quadratic over a
+    batch of appends.
+    """
+
     def serialise_entity_instance(entity):
         return {"cast_type": "entity_instance", "value": entity.id(), "Name": getattr(entity, "Name", None)}
+
+    def serialise_item(item):
+        if isinstance(item, ifcopenshell.entity_instance):
+            return serialise_entity_instance(item)
+        # A nested container is described, never stringified, so a single
+        # sampled item cannot cost more than the sample it belongs to.
+        if isinstance(item, (list, tuple, set, frozenset, dict)):
+            return {"cast_type": item.__class__.__name__, "length": len(item)}
+        try:
+            return str(item)[:MAX_SERIALISED_CHARS]
+        except:
+            return "n/a"
+
+    def serialise_container(value):
+        # ifcopenshell.api.type shadows the type builtin in this module.
+        serialised = {"cast_type": value.__class__.__name__, "length": len(value)}
+        try:
+            if isinstance(value, dict):
+                # islice, not a slice: materialising the container first would
+                # be the very cost this function has to avoid.
+                sample = itertools.islice(value.items(), MAX_SERIALISED_ITEMS)
+                serialised["value"] = [[serialise_item(k), serialise_item(v)] for k, v in sample]
+            else:
+                sample = itertools.islice(value, MAX_SERIALISED_ITEMS)
+                serialised["value"] = [serialise_item(i) for i in sample]
+        except:
+            pass
+        return serialised
 
     vcs_settings = settings.copy()
     for key, value in settings.items():
@@ -240,11 +287,11 @@ def serialise_settings(settings):
             vcs_settings[key] = serialise_entity_instance(value)
         elif isinstance(value, numpy.ndarray):
             vcs_settings[key] = {"cast_type": "ndarray", "value": value.tolist()}
-        elif isinstance(value, list) and value and isinstance(value[0], ifcopenshell.entity_instance):
-            vcs_settings[key] = [serialise_entity_instance(i) for i in value]
+        elif isinstance(value, (list, tuple, set, frozenset, dict)):
+            vcs_settings[key] = serialise_container(value)
         else:
             try:
-                vcs_settings[key] = str(value)
+                vcs_settings[key] = str(value)[:MAX_SERIALISED_CHARS]
             except:
                 vcs_settings[key] = "n/a"
     try:
