@@ -1317,6 +1317,74 @@ class TestRemoveDeep2IFC4(test.bootstrap.IFC4):
         assert self.file.by_id(1)
         assert self.file.by_guid("id1")
 
+    def test_removing_a_subelement_referenced_many_times_by_a_single_parent(self):
+        point = self.file.createIfcCartesianPoint((0.0, 0.0, 0.0))
+        polyline = self.file.createIfcPolyline(Points=[point] * 10)
+        assert self.file.get_total_inverses(point) == 10
+        subject.remove_deep2(self.file, polyline)
+        assert not list(self.file)
+
+    def test_removing_a_subelement_referenced_twice_through_two_attributes(self):
+        point = self.file.createIfcCartesianPoint((0.0, 0.0, 0.0))
+        direction = self.file.createIfcDirection((0.0, 0.0, 1.0))
+        placement = self.file.createIfcAxis2Placement3D(point, direction, direction)
+        local_placement = self.file.createIfcLocalPlacement(RelativePlacement=placement)
+        assert self.file.get_total_inverses(direction) == 2
+        subject.remove_deep2(self.file, local_placement)
+        assert not list(self.file)
+
+    def test_not_removing_a_subelement_shared_with_an_element_outside_the_subgraph(self):
+        direction = self.file.createIfcDirection((0.0, 0.0, 1.0))
+        outsiders = [self.file.createIfcAxis2Placement3D(Axis=direction) for _ in range(50)]
+        point = self.file.createIfcCartesianPoint((0.0, 0.0, 0.0))
+        placement = self.file.createIfcAxis2Placement3D(point, direction)
+        local_placement = self.file.createIfcLocalPlacement(RelativePlacement=placement)
+        subject.remove_deep2(self.file, local_placement)
+        assert direction in list(self.file)
+        assert point not in list(self.file)
+        assert all(outsider in list(self.file) for outsider in outsiders)
+
+    def test_not_listing_inverses_that_cannot_fit_inside_the_subgraph(self, monkeypatch):
+        direction = self.file.createIfcDirection((0.0, 0.0, 1.0))
+        for _ in range(50):
+            self.file.createIfcAxis2Placement3D(Axis=direction)
+        placement = self.file.createIfcAxis2Placement3D(self.file.createIfcCartesianPoint((0.0, 0.0, 0.0)), direction)
+        local_placement = self.file.createIfcLocalPlacement(RelativePlacement=placement)
+
+        listed = []
+        original = ifcopenshell.file.get_inverse
+
+        def counting_get_inverse(self, inst, *args, **kwargs):
+            listed.append(inst)
+            return original(self, inst, *args, **kwargs)
+
+        monkeypatch.setattr(ifcopenshell.file, "get_inverse", counting_get_inverse)
+        subject.remove_deep2(self.file, local_placement)
+        assert direction not in listed
+
+    def test_counting_attribute_slots_bounds_the_registered_inverses(self):
+        point = self.file.createIfcCartesianPoint((0.0, 0.0, 0.0))
+        direction = self.file.createIfcDirection((0.0, 0.0, 1.0))
+        self.file.createIfcPolyline(Points=[point, point, point])
+        self.file.createIfcAxis2Placement3D(point, direction, direction)
+        self.file.createIfcBSplineSurfaceWithKnots(
+            UDegree=1,
+            VDegree=1,
+            ControlPointsList=((point, point), (point, point)),
+            SurfaceForm="UNSPECIFIED",
+            UClosed=False,
+            VClosed=False,
+            SelfIntersect=False,
+            UMultiplicities=(2, 2),
+            VMultiplicities=(2, 2),
+            UKnots=(0.0, 1.0),
+            VKnots=(0.0, 1.0),
+            KnotSpec="UNSPECIFIED",
+        )
+        bound = sum(subject.count_attribute_slots(e) for e in self.file)
+        for element in self.file:
+            assert self.file.get_total_inverses(element) <= bound
+
 
 class TestBatchRemoveDeep2IFC4(test.bootstrap.IFC4):
     def test_run(self):

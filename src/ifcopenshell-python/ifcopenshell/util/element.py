@@ -1713,6 +1713,42 @@ def unbatch_remove_deep2(ifc_file: ifcopenshell.file) -> ifcopenshell.file:
     return ifcopenshell.file.from_string("\n".join(result))
 
 
+def count_attribute_slots(element: ifcopenshell.entity_instance) -> int:
+    """Count the attribute value slots of an element
+
+    Every entity reference stored in an element occupies exactly one such slot,
+    so this is an upper bound on the number of inverses the element registers.
+    Nested aggregates are counted per innermost value; a slot holding a plain
+    value rather than an entity reference is counted too, which only makes the
+    bound looser, never wrong.
+
+    :param element: The element to count the attribute value slots of
+    :return: The number of attribute value slots
+    """
+    total = 0
+    for attribute in element:
+        if not isinstance(attribute, tuple):
+            total += 1
+        elif attribute and isinstance(attribute[0], tuple):
+            total += sum(count_nested_slots(item) for item in attribute)
+        else:
+            total += len(attribute)
+    return total
+
+
+def count_nested_slots(value: Any) -> int:
+    """Count the innermost values of a possibly nested aggregate
+
+    :param value: An aggregate or a single value
+    :return: The number of innermost values
+    """
+    if not isinstance(value, tuple):
+        return 1
+    if value and isinstance(value[0], tuple):
+        return sum(count_nested_slots(item) for item in value)
+    return len(value)
+
+
 def remove_deep2(
     ifc_file: Union[ifcopenshell.file, None],
     element: ifcopenshell.entity_instance,
@@ -1775,6 +1811,15 @@ def remove_deep2(
     subgraph.extend(also_consider)
     subgraph_set = set(subgraph)
     subelement_queue = [element]
+    max_subgraph_slots: Union[int, None] = None
+
+    def get_max_subgraph_slots() -> int:
+        # Upper bound on the references the subgraph can hold to any one
+        # subelement. Deletion only ever drops references, so it stays valid.
+        nonlocal max_subgraph_slots
+        if max_subgraph_slots is None:
+            max_subgraph_slots = sum(count_attribute_slots(e) for e in subgraph_set)
+        return max_subgraph_slots
 
     # Cache already processed entities to avoid traversing them multiple time.
     # E.g. lots of IFCINDEXEDPOLYCURVES may reference the same IFCCARTESIANPOINTLIST2D.
@@ -1789,9 +1834,13 @@ def remove_deep2(
             and subelement not in do_not_delete
             and (
                 # 0 or 1 inverses guarantees that the subelement only exists in this subgraph
-                ifc_file.get_total_inverses(subelement) < 2
-                # Alternatively, let's ensure all inverses are within the subgraph
-                or len(set(ifc_file.get_inverse(subelement)) - subgraph_set) == 0
+                (subelement_inverses := ifc_file.get_total_inverses(subelement)) < 2
+                # More inverses than the subgraph can hold puts one of them outside it
+                or (
+                    subelement_inverses <= get_max_subgraph_slots()
+                    # Alternatively, let's ensure all inverses are within the subgraph
+                    and len(set(ifc_file.get_inverse(subelement)) - subgraph_set) == 0
+                )
             )
         ):
             to_delete.add(subelement)
