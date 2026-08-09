@@ -288,6 +288,9 @@ class IfcDiff:
         # result of DeepDiff may contain ordered sets
         if isinstance(obj, (StableSet, set)):
             return list(obj)
+        # DeepDiff type_changes stores the Python class objects themselves
+        if isinstance(obj, type):
+            return obj.__name__
         return json.JSONEncoder.default(None, obj)
 
     def export(self, path: str) -> None:
