@@ -16,6 +16,7 @@
 # You should have received a copy of the GNU Lesser General Public License
 # along with IfcOpenShell.  If not, see <http://www.gnu.org/licenses/>.
 
+import csv
 import json
 import os
 import tempfile
@@ -456,3 +457,111 @@ class TestIfcDiffRealSamplePair:
         placement_change = ifc_diff.change_register["23sFQGRy90RxVbRHD9iSE2"]["placement_changed"]
         assert placement_change["moved"] == pytest.approx(40000.0, abs=1.0)
         assert placement_change["rotated"] is True
+
+
+class TestIfcDiffCsvExport:
+    def test_csv_export_has_one_row_per_object(self):
+        ifc_file = setup_project()
+        wall = ifcopenshell.api.root.create_entity(ifc_file, ifc_class="IfcWall", name="Foo")
+        material_a = ifcopenshell.api.material.add_material(ifc_file, name="Soil1")
+        ifcopenshell.api.material.assign_material(ifc_file, products=[wall], material=material_a)
+        deleted_wall = ifcopenshell.api.root.create_entity(ifc_file, ifc_class="IfcWall", name="Gone")
+
+        new_file = ifc_file.from_string(ifc_file.to_string())
+        wall_new = new_file.by_id(wall.id())
+        wall_new.Name = "Bar"
+        material_b = ifcopenshell.api.material.add_material(new_file, name="topsoil")
+        ifcopenshell.api.material.assign_material(new_file, products=[wall_new], material=material_b)
+        ifcopenshell.api.root.remove_product(new_file, new_file.by_id(deleted_wall.id()))
+        ifcopenshell.api.root.remove_product(new_file, new_file.by_id(wall.id()))
+        slab = ifcopenshell.api.root.create_entity(new_file, ifc_class="IfcSlab", name="Reclassified")
+        slab.GlobalId = wall.GlobalId
+        ifcopenshell.api.material.assign_material(new_file, products=[slab], material=material_b)
+        added_wall = ifcopenshell.api.root.create_entity(new_file, ifc_class="IfcWall", name="New")
+
+        ifc_diff = ifcdiff.IfcDiff(ifc_file, new_file, relationships=["attributes", "material"], is_shallow=False)
+        ifc_diff.diff()
+        assert ifc_diff.added_elements == {added_wall.GlobalId}
+        assert ifc_diff.deleted_elements == {deleted_wall.GlobalId}
+        assert set(ifc_diff.change_register.keys()) == {wall.GlobalId}
+        changed_entry = ifc_diff.change_register[wall.GlobalId]
+        assert "class_changed" in changed_entry
+        assert "material_changed" in changed_entry
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output = os.path.join(tmp_dir, "diff.csv")
+            ifc_diff.export_csv(output)
+
+            with open(output, newline="", encoding="utf-8") as csv_file:
+                reader = csv.DictReader(csv_file)
+                assert reader.fieldnames == ["Impact", "GlobalId", "Name", "IfcType", "ChangeKinds", "Details"]
+                rows = list(reader)
+
+        assert len(rows) == 3
+        by_id = {row["GlobalId"]: row for row in rows}
+
+        added_row = by_id[added_wall.GlobalId]
+        assert added_row["Impact"] == "Added"
+        assert added_row["Name"] == "New"
+        assert added_row["IfcType"] == "IfcWall"
+
+        deleted_row = by_id[deleted_wall.GlobalId]
+        assert deleted_row["Impact"] == "Deleted"
+        assert deleted_row["Name"] == "Gone"
+        assert deleted_row["IfcType"] == "IfcWall"
+
+        changed_row = by_id[wall.GlobalId]
+        assert changed_row["Impact"] == "Changed"
+        assert changed_row["Name"] == "Reclassified"
+        assert changed_row["IfcType"] == "IfcSlab"
+        assert "Class" in changed_row["ChangeKinds"]
+        assert "Material" in changed_row["ChangeKinds"]
+        assert "class IfcWall -> IfcSlab" in changed_row["Details"]
+        assert "material ['Soil1'] -> ['topsoil']" in changed_row["Details"]
+
+    def test_csv_export_matches_real_sample_pair(self):
+        if not os.path.exists(SAMPLE_MODEL_OLD) or not os.path.exists(SAMPLE_MODEL_NEW):
+            pytest.skip("Real sample IFC pair not available on this machine")
+
+        old = ifcopenshell.open(SAMPLE_MODEL_OLD)
+        new = ifcopenshell.open(SAMPLE_MODEL_NEW)
+
+        ifc_diff = ifcdiff.IfcDiff(
+            old,
+            new,
+            relationships=[
+                "attributes",
+                "geometry",
+                "property",
+                "type",
+                "container",
+                "aggregate",
+                "classification",
+                "material",
+                "placement",
+            ],
+            is_shallow=False,
+        )
+        ifc_diff.diff()
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output = os.path.join(tmp_dir, "diff.csv")
+            ifc_diff.export_csv(output)
+
+            with open(output, newline="", encoding="utf-8") as csv_file:
+                reader = csv.DictReader(csv_file)
+                rows = list(reader)
+
+        assert len(rows) == 29
+        by_id = {row["GlobalId"]: row for row in rows}
+
+        placement_row = by_id["23sFQGRy90RxVbRHD9iSE2"]
+        assert placement_row["Impact"] == "Changed"
+        assert "Placement" in placement_row["ChangeKinds"]
+        assert "moved" in placement_row["Details"]
+
+        material_row = by_id["2eGMeS8JXEqPOIXktx3T6F"]
+        assert material_row["Impact"] == "Changed"
+        assert "Material" in material_row["ChangeKinds"]
+        assert "Soil1" in material_row["Details"]
+        assert "topsoil" in material_row["Details"]

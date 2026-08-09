@@ -21,10 +21,12 @@
 # This can be packaged with `pyinstaller --onefile --clean --icon=icon.ico ifcdiff.py`
 
 import argparse
+import csv
 import json
 import logging
 import multiprocessing
 import time
+from collections.abc import Callable
 from typing import Any, Literal, Optional, Union
 
 import ifcopenshell
@@ -52,6 +54,113 @@ RELATIONSHIP_TYPE = Literal[
     "material",
     "placement",
 ]
+
+
+CHANGE_KIND_NAMES = {
+    "class_changed": "Class",
+    "attributes_changed": "Attributes",
+    "properties_changed": "Properties",
+    "geometry_changed": "Geometry",
+    "placement_changed": "Placement",
+    "material_changed": "Material",
+    "type_changed": "Type",
+    "container_changed": "Container",
+    "aggregate_changed": "Aggregate",
+    "classification_changed": "Classification",
+}
+
+CSV_FIELDNAMES = ["Impact", "GlobalId", "Name", "IfcType", "ChangeKinds", "Details"]
+
+
+def change_kinds_csv(change: dict[str, Any]) -> str:
+    """Human readable, comma separated list of the kinds of change stored in a
+    single change_register entry."""
+    return ", ".join(CHANGE_KIND_NAMES.get(k, k) for k in sorted(change))
+
+
+def change_details_csv(change: dict[str, Any], limit: int = 240) -> str:
+    """One human readable summary line for a single change_register entry."""
+    bits = []
+    for key, val in sorted(change.items()):
+        if val is True:
+            continue
+        if key == "class_changed" and isinstance(val, dict):
+            bits.append(f"class {val.get('old_class')} -> {val.get('new_class')}")
+        elif key == "placement_changed" and isinstance(val, dict):
+            moved = val.get("moved")
+            rotated = ", rotated" if val.get("rotated") else ""
+            bits.append(f"moved {moved}{rotated}")
+        elif key == "material_changed" and isinstance(val, dict):
+            old_materials = val.get("old_materials", val.get("old"))
+            new_materials = val.get("new_materials", val.get("new"))
+            bits.append(f"material {old_materials} -> {new_materials}")
+        elif isinstance(val, dict):
+            for section in ("values_changed", "type_changes"):
+                for path, detail in (val.get(section) or {}).items():
+                    field = path.replace("root", "").replace("']['", ".").strip("[]'")
+                    bits.append(f"{field}: {detail.get('old_value')!r} -> {detail.get('new_value')!r}")
+            for section in ("dictionary_item_added", "dictionary_item_removed"):
+                for path in val.get(section) or []:
+                    field = str(path).replace("root", "").replace("']['", ".").strip("[]'")
+                    tag = "added" if "added" in section else "removed"
+                    bits.append(f"{field} {tag}")
+        elif not isinstance(val, dict):
+            bits.append(str(val))
+    text = " | ".join(bits)
+    return text[:limit] + ("..." if len(text) > limit else "")
+
+
+def write_diff_csv(
+    path: str,
+    added: list[str],
+    deleted: list[str],
+    changed: dict[str, dict[str, Any]],
+    resolve: Callable[[str, str], tuple[str, str]],
+) -> None:
+    """Write one row per object to a CSV file.
+
+    :param resolve: called as ``resolve(global_id, impact)`` where impact is
+        one of "Added", "Deleted", "Changed". Must return ``(name, ifc_type)``.
+    """
+    with open(path, "w", newline="", encoding="utf-8") as csv_file:
+        writer = csv.DictWriter(csv_file, fieldnames=CSV_FIELDNAMES)
+        writer.writeheader()
+        for global_id in sorted(added):
+            name, ifc_type = resolve(global_id, "Added")
+            writer.writerow(
+                {
+                    "Impact": "Added",
+                    "GlobalId": global_id,
+                    "Name": name,
+                    "IfcType": ifc_type,
+                    "ChangeKinds": "",
+                    "Details": "",
+                }
+            )
+        for global_id in sorted(deleted):
+            name, ifc_type = resolve(global_id, "Deleted")
+            writer.writerow(
+                {
+                    "Impact": "Deleted",
+                    "GlobalId": global_id,
+                    "Name": name,
+                    "IfcType": ifc_type,
+                    "ChangeKinds": "",
+                    "Details": "",
+                }
+            )
+        for global_id, change in sorted(changed.items()):
+            name, ifc_type = resolve(global_id, "Changed")
+            writer.writerow(
+                {
+                    "Impact": "Changed",
+                    "GlobalId": global_id,
+                    "Name": name,
+                    "IfcType": ifc_type,
+                    "ChangeKinds": change_kinds_csv(change),
+                    "Details": change_details_csv(change),
+                }
+            )
 
 
 class IfcDiff:
@@ -305,6 +414,30 @@ class IfcDiff:
                 indent=4,
                 default=self.json_dump_default,
             )
+
+    def export_csv(self, path: str) -> None:
+        """Write one row per added/deleted/changed object to a CSV file.
+
+        Name and IfcType are resolved from the old model for deleted objects
+        and from the new model otherwise, using the models already held by
+        this instance. No extra file loading is done.
+        """
+
+        def resolve(global_id: str, impact: str) -> tuple[str, str]:
+            model = self.old if impact == "Deleted" else self.new
+            try:
+                element = model.by_guid(global_id)
+            except Exception:
+                return "", ""
+            return (element.Name or "", element.is_a())
+
+        write_diff_csv(
+            path,
+            list(self.added_elements),
+            list(self.deleted_elements),
+            self.change_register,
+            resolve,
+        )
 
     def get_precision(self) -> float:
         contexts = [c for c in self.new.by_type("IfcGeometricRepresentationContext") if c.ContextType == "Model"]
@@ -569,6 +702,9 @@ if __name__ == "__main__":
         "-o", "--output", type=str, help="The JSON diff file to output. Defaults to diff.json", default="diff.json"
     )
     parser.add_argument(
+        "--csv", type=str, help="Also write a CSV summary (one row per object) to this path.", default=None
+    )
+    parser.add_argument(
         "-r",
         "--relationships",
         type=str,
@@ -598,3 +734,5 @@ if __name__ == "__main__":
     print("# Diff finished in {:.2f} seconds".format(time.time() - start))
 
     ifc_diff.export(args.output)
+    if args.csv:
+        ifc_diff.export_csv(args.csv)
