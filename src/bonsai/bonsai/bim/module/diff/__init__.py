@@ -22,6 +22,7 @@ from . import operator, prop, ui
 
 classes = (
     operator.ExecuteIfcDiff,
+    operator.ExportDiffCsv,
     operator.SelectDiffJsonFile,
     operator.SelectDiffNewFile,
     operator.SelectDiffObjects,

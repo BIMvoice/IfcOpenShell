@@ -103,6 +103,7 @@ class BIM_PT_diff(Panel):
         row.prop(props, "diff_json_file")
         row.operator("bim.select_diff_json_file", icon="FILE_FOLDER", text="")
         row.operator("bim.visualise_diff", icon="HIDE_OFF", text="")
+        row.operator("bim.export_diff_csv", icon="EXPORT", text="")
 
         if DiffData.data["diff_json"]:
             row = layout.row()

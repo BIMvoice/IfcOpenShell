@@ -18,6 +18,7 @@
 
 import json
 import logging
+import os
 
 import bpy
 import ifcdiff
@@ -103,6 +104,49 @@ class VisualiseDiff(bpy.types.Operator):
         return {"FINISHED"}
 
 
+class ExportDiffCsv(bpy.types.Operator):
+    bl_idname = "bim.export_diff_csv"
+    bl_label = "Export Diff CSV"
+    bl_description = "Convert the loaded diff JSON into a CSV, one row per object."
+    bl_options = {"REGISTER", "UNDO"}
+
+    def execute(self, context):
+        props = tool.Blender.get_diff_props()
+        if not props.diff_json_file or not os.path.exists(props.diff_json_file):
+            self.report({"ERROR"}, "No diff JSON file is loaded.")
+            return {"CANCELLED"}
+
+        with open(props.diff_json_file, "r") as file:
+            diff = json.load(file)
+
+        lookup: dict[str, tuple[str, str]] = {}
+        for path in (props.old_file, props.new_file):
+            if not path or not os.path.exists(path):
+                continue
+            try:
+                ifc_file = ifcopenshell.open(path)
+            except Exception:
+                continue
+            for element in ifc_file.by_type("IfcRoot"):
+                global_id = getattr(element, "GlobalId", None)
+                if global_id:
+                    lookup[global_id] = (element.Name or "", element.is_a())
+
+        def resolve(global_id: str, impact: str) -> tuple[str, str]:
+            return lookup.get(global_id, ("", ""))
+
+        csv_path = os.path.splitext(props.diff_json_file)[0] + ".csv"
+        ifcdiff.write_diff_csv(
+            csv_path,
+            diff.get("added", []),
+            diff.get("deleted", []),
+            diff.get("changed", {}),
+            resolve,
+        )
+        self.report({"INFO"}, f"CSV written to {csv_path}")
+        return {"FINISHED"}
+
+
 class SelectDiffOldFile(bpy.types.Operator, ImportHelper):
     bl_idname = "bim.select_diff_old_file"
     bl_label = "Select Diff Old File"
@@ -163,6 +207,7 @@ class ExecuteIfcDiff(bpy.types.Operator, ExportHelper):
         ifc_diff = ifcdiff.IfcDiff(old, new, relationships=relationships, filter_elements=query)
         ifc_diff.diff()
         ifc_diff.export(self.filepath)
+        ifc_diff.export_csv(os.path.splitext(self.filepath)[0] + ".csv")
         self.props.diff_json_file = self.filepath
 
         self.load_changed_elements(ifc_diff)
