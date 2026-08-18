@@ -478,14 +478,14 @@ class MEPGenerator:
             if predefined_type == "OBSTRUCTION":
                 return packed_data
 
-            start_port = None
-            for port in ports:
-                port_local_position = V(*port.ObjectPlacement.RelativePlacement.Location.Coordinates)
-                if tool.Cad.is_x(port_local_position.length, 0.0):
-                    start_port = port
-                    break
+            # the start port is placed at the fitting's local origin, but for fittings that
+            # weren't created parametrically none of the ports may sit exactly there, so we
+            # fall back to the port closest to the origin to avoid an unbound `start_port`
+            start_port = min(
+                ports,
+                key=lambda port: V(*port.ObjectPlacement.RelativePlacement.Location.Coordinates).length,
+            )
 
-            assert start_port is not None
             connected_port = tool.System.get_connected_port(start_port)
             connected_element = tool.System.get_port_relating_element(connected_port)
             element_type = ifcopenshell.util.element.get_type(connected_element)
