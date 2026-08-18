@@ -2129,6 +2129,8 @@ bool cgal_kernel::convert_impl(const taxonomy::boolean_result::ptr br, std::vect
 	*/
 
 	first = true;
+	// Whether the base operand ever contributed a Nef polyhedron to `a`.
+	bool base_operand_succeeded = false;
 
 	std::list<cgal_polyhedron> ops;
 	std::list<CGAL::Nef_polyhedron_3<kernel_>> nefops;
@@ -2151,6 +2153,7 @@ bool cgal_kernel::convert_impl(const taxonomy::boolean_result::ptr br, std::vect
 
 			if (first) {
 				a = nef;
+				base_operand_succeeded = true;
 			} else {
 				if (br->operation == taxonomy::boolean_result::SUBTRACTION) {
 					second_operand_collector.add_polyhedron(nef);
@@ -2165,6 +2168,11 @@ bool cgal_kernel::convert_impl(const taxonomy::boolean_result::ptr br, std::vect
 		}
 
 		first = false;
+	}
+
+	if (!base_operand_succeeded && br->operation != taxonomy::boolean_result::UNION) {
+		logger().message(ifcopenshell::logger::LOG_ERROR, "GEO", 105, "Could not process base operand of boolean operation:", br->instance);
+		return false;
 	}
 
 	if (br->operation == taxonomy::boolean_result::SUBTRACTION && second_operand_collector_size) {
