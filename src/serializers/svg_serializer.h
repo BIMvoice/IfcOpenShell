@@ -38,6 +38,7 @@
 #include <gp_Pln.hxx>
 #include <Bnd_Box.hxx>
 #include <Standard_Version.hxx>
+#include <Standard_Failure.hxx>
 #include <BRep_Builder.hxx>
 #include <HLRBRep_PolyHLRToShape.hxx>
 #include <BRepTopAdaptor_FClass2d.hxx>
@@ -382,6 +383,16 @@ namespace {
 
 		ifcopenshell::logger& logger_;
 
+		// Characterise an OpenCASCADE failure for the log so the cause is actionable
+		// instead of an opaque "unknown error". OCCT throws Standard_Failure, which on
+		// some OCCT builds does not derive from std::exception, hence the dedicated
+		// overload. See #3971.
+		static std::string describe_occt_failure(const Standard_Failure& e) {
+			std::string type = e.DynamicType() ? e.DynamicType()->Name() : "Standard_Failure";
+			const char* msg = e.GetMessageString();
+			return type + (msg && *msg ? std::string(": ") + msg : std::string());
+		}
+
 	public:
 
 		prefiltered_hlr(ifcopenshell::logger& logger, bool use_prefiltering, bool use_hlr_poly, bool segment_projection, const gp_Pln& view_direction)
@@ -465,64 +476,102 @@ namespace {
 			gp_Vec V;
 			gp_Dir D;
 
-			if (ifcopenshell::geom::util::is_manifold(s)) {
-				size_t n_faces_included = 0, n_total = 0;
-				{
-					TopExp_Explorer exp(s, TopAbs_FACE);
-					for (; exp.More(); exp.Next(), n_total++) {
-						const auto& face = TopoDS::Face(exp.Current());
-						if (BRep_Tool::Surface(face)->DynamicType() == STANDARD_TYPE(Geom_Plane)) {
-							BRepGProp_Face prop(face);
+			// The prefiltering analysis below (manifold test, face classification) runs OCCT
+			// routines that can throw. If building the filtered compound fails, fall back to
+			// adding the shape unfiltered so a single failing element cannot abort the drawing
+			// during HLR accumulation. See #3971.
+			bool is_manifold = false;
+			try {
+				is_manifold = ifcopenshell::geom::util::is_manifold(s);
+			} catch (const Standard_Failure& e) {
+				logger_.notice("SER", 36, "Manifold test failed, treating element as non-manifold: " + describe_occt_failure(e), product);
+				is_manifold = false;
+			} catch (const std::exception& e) {
+				logger_.notice("SER", 36, e, product);
+				is_manifold = false;
+			} catch (...) {
+				logger_.notice("SER", 36, "Manifold test failed for element, treating as non-manifold", product);
+				is_manifold = false;
+			}
 
-							prop.Normal(0., 0., P, V);
-							if (V.SquareMagnitude() > 1.e-9) {
-								D = V;
-								// keep only front-facing
-								if (D.Dot(view_direction_.Direction()) > 1.e-3) {
-									BB.Add(C, face);
-									n_faces_included++;
+			if (is_manifold) {
+				try {
+					size_t n_faces_included = 0, n_total = 0;
+					{
+						TopExp_Explorer exp(s, TopAbs_FACE);
+						for (; exp.More(); exp.Next(), n_total++) {
+							const auto& face = TopoDS::Face(exp.Current());
+							if (BRep_Tool::Surface(face)->DynamicType() == STANDARD_TYPE(Geom_Plane)) {
+								BRepGProp_Face prop(face);
+
+								prop.Normal(0., 0., P, V);
+								if (V.SquareMagnitude() > 1.e-9) {
+									D = V;
+									// keep only front-facing
+									if (D.Dot(view_direction_.Direction()) > 1.e-3) {
+										BB.Add(C, face);
+										n_faces_included++;
+									}
 								}
+							} else {
+								BB.Add(C, face);
+								n_faces_included++;
 							}
-						} else {
-							BB.Add(C, face);
-							n_faces_included++;
 						}
 					}
-				}
 
-				logger_.notice("SER", 34, "Included " + std::to_string(n_faces_included) + " faces out of " + std::to_string(n_total) + " after prefiltering");
+					logger_.notice("SER", 34, "Included " + std::to_string(n_faces_included) + " faces out of " + std::to_string(n_total) + " after prefiltering");
 
-				auto it = items_.insert(items_.end(), { product, C });
+					auto it = items_.insert(items_.end(), { product, C });
 
-				{
-					TopExp_Explorer exp(C, TopAbs_FACE);
-					for (; exp.More(); exp.Next()) {
-						const auto& face = TopoDS::Face(exp.Current());
-						if (BRep_Tool::Surface(face)->DynamicType() == STANDARD_TYPE(Geom_Plane)) {
-							
-							// find large faces orthogonal to view dir
-							BRepGProp_Face prop(face);
-							prop.Normal(0., 0., P, V);
-							D = V;
+					try {
+						TopExp_Explorer exp(C, TopAbs_FACE);
+						for (; exp.More(); exp.Next()) {
+							const auto& face = TopoDS::Face(exp.Current());
+							if (BRep_Tool::Surface(face)->DynamicType() == STANDARD_TYPE(Geom_Plane)) {
 
-							if (D.Dot(view_direction_.Direction()) > (1. - 1.e-3)) {
-								if (ifcopenshell::geom::util::face_area(face) > 2.) {
-									// arbitrary vertex, is ok because orthogonal to view dir
-									TopExp_Explorer expv(face, TopAbs_VERTEX);
-									if (expv.More()) {
-										const auto& v = TopoDS::Vertex(expv.Current());
-										auto pnt = BRep_Tool::Pnt(v);
+								// find large faces orthogonal to view dir
+								BRepGProp_Face prop(face);
+								prop.Normal(0., 0., P, V);
+								D = V;
 
-										auto d = -(pnt.XYZ() - view_direction_.Location().XYZ()).Dot(view_direction_.Direction().XYZ());
+								if (D.Dot(view_direction_.Direction()) > (1. - 1.e-3)) {
+									if (ifcopenshell::geom::util::face_area(face) > 2.) {
+										// arbitrary vertex, is ok because orthogonal to view dir
+										TopExp_Explorer expv(face, TopAbs_VERTEX);
+										if (expv.More()) {
+											const auto& v = TopoDS::Vertex(expv.Current());
+											auto pnt = BRep_Tool::Pnt(v);
 
-										if (d > 1.e-5) {
-											large_ortho_faces_.insert({ d, face_info(&it->second, face) });
+											auto d = -(pnt.XYZ() - view_direction_.Location().XYZ()).Dot(view_direction_.Direction().XYZ());
+
+											if (d > 1.e-5) {
+												large_ortho_faces_.insert({ d, face_info(&it->second, face) });
+											}
 										}
 									}
 								}
 							}
 						}
+					} catch (const Standard_Failure& e) {
+						logger_.notice("SER", 38, "Incomplete obscuration prefiltering cache for element: " + describe_occt_failure(e), product);
+					} catch (const std::exception& e) {
+						logger_.notice("SER", 38, e, product);
+					} catch (...) {
+						logger_.notice("SER", 38, "Incomplete obscuration prefiltering cache for element", product);
 					}
+				} catch (const Standard_Failure& e) {
+					logger_.warning("SER", 37, "Prefilter face analysis failed, element added unfiltered to hidden line removal: " + describe_occt_failure(e), product);
+					items_.insert(items_.end(), { product, s });
+					return;
+				} catch (const std::exception& e) {
+					logger_.warning("SER", 37, e, product);
+					items_.insert(items_.end(), { product, s });
+					return;
+				} catch (...) {
+					logger_.warning("SER", 37, "Prefilter face analysis failed, element added unfiltered to hidden line removal", product);
+					items_.insert(items_.end(), { product, s });
+					return;
 				}
 			} else {
 				items_.insert(items_.end(), { product, s });
@@ -532,22 +581,48 @@ namespace {
 		std::list<std::tuple<express::base, std::string, TopoDS_Shape>> build() {
 			size_t n_included = 0;
 			for (auto it = items_.begin(); it != items_.end(); ++it) {
-				if (!use_prefiltering_ || !is_obscured_(&it->second)) {
-					hlr_writer vis(it->second);
-					boost::apply_visitor(vis, engine_);
-					n_included++;
+				// The per-element OCCT routines (obscuration test, HLRBRep_Algo::Add /
+				// BRepMesh / Load) can throw on some inputs. Skip the offending element with
+				// a warning rather than aborting the whole drawing. See #3971.
+				try {
+					if (!use_prefiltering_ || !is_obscured_(&it->second)) {
+						hlr_writer vis(it->second);
+						boost::apply_visitor(vis, engine_);
+						n_included++;
+					}
+				} catch (const Standard_Failure& e) {
+					logger_.warning("SER", 39, "Element skipped in hidden line removal: " + describe_occt_failure(e), it->first);
+				} catch (const std::exception& e) {
+					logger_.warning("SER", 39, e, it->first);
+				} catch (...) {
+					logger_.warning("SER", 39, "Element skipped in hidden line removal", it->first);
 				}
 			}
 			if (use_prefiltering_) {
 				logger_.notice("SER", 35, "Included " + std::to_string(n_included) + " elements out of " + std::to_string(items_.size()) + " after prefiltering");
 			}
-			
+
 			hlr_calc vis(projector_);
 			if (segment_projection_) {
 				vis.set_product_shape(&items_);
 			}
 			vis.set_classified_shapes(&classified_items_);
-			return boost::apply_visitor(vis, engine_);
+			// The projection pass (HLRBRep_Algo::Update/Hide or the poly HLR equivalent) runs
+			// over the whole accumulated compound at once, so it has no per-element
+			// granularity. Keep the drawing alive by emitting no projected linework for it
+			// instead of propagating the failure out of build(). See #3971.
+			try {
+				return boost::apply_visitor(vis, engine_);
+			} catch (const Standard_Failure& e) {
+				logger_.error("SER", 40, "Projected hidden line removal failed, drawing rendered without projected linework: " + describe_occt_failure(e));
+				return {};
+			} catch (const std::exception& e) {
+				logger_.error("SER", 40, e);
+				return {};
+			} catch (...) {
+				logger_.error("SER", 40, "Projected hidden line removal failed, drawing rendered without projected linework");
+				return {};
+			}
 		}
 	};
 }
