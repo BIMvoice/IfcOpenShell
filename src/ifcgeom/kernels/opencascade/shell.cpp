@@ -2,6 +2,9 @@
 
 #include "base_utils.h"
 
+#include <BRepCheck_Analyzer.hxx>
+#include <ShapeFix_Shape.hxx>
+
 using namespace ifcopenshell::geom;
 using namespace ifcopenshell::geom::kernels;
 using namespace ifcopenshell::geom::util;
@@ -100,6 +103,27 @@ bool open_cascade_kernel::convert(const taxonomy::shell::ptr l, TopoDS_Shape& sh
 			builder.Add(compound, face_iterator.Value());
 		}
 		shape = compound;
+	}
+
+	// Heal the assembled faceset when it is not topologically sound (e.g. an open
+	// terrain mesh yields self-intersecting wires/unorientable faces, #4029/#6581).
+	// Only adopt the healed shape when it actually restores validity.
+	if (!shape.IsNull() && !BRepCheck_Analyzer(shape).IsValid()) {
+		try {
+			ShapeFix_Shape sfs(shape);
+			sfs.Perform();
+			if (!sfs.Shape().IsNull() && BRepCheck_Analyzer(sfs.Shape()).IsValid()) {
+				shape = sfs.Shape();
+			}
+		} catch (const Standard_Failure& e) {
+			if (e.GetMessageString() && strlen(e.GetMessageString())) {
+				logger_.error("GEO", 402, e.GetMessageString());
+			} else {
+				logger_.error("GEO", 403, "Unknown error healing faceset");
+			}
+		} catch (...) {
+			logger_.error("GEO", 404, "Unknown error healing faceset");
+		}
 	}
 
 	return true;
