@@ -716,6 +716,13 @@ namespace ifcopenshell {
 		static constexpr bool defaultvalue = false;
 	};
 
+	struct GltfExtras : public settings_detail::SettingBase<GltfExtras, bool> {
+		static constexpr const char* const name = "gltf-extras";
+		static constexpr const char* const description = "Write the IFC GlobalId, entity type and name of every element into the "
+			"glTF node extras, so the output is self-describing without a sidecar file. Applicable to GLB output.";
+		static constexpr bool defaultvalue = false;
+	};
+
 	struct FloatingPointDigits : public settings_detail::SettingBase<FloatingPointDigits, int> {
 		static constexpr const char* const name = "digits";
 		static constexpr const char* const description = "Sets the precision to be used to format floating-point values, 15 by default. Use a negative value to use the system's default precision (should be 6 typically). Applicable for OBJ and DAE output. For DAE output, value >= 15 means that up to 16 decimals are used,  and any other value means that 6 or 7 decimals are used.";
@@ -972,6 +979,7 @@ using geometry_setting_types = std::tuple<
 			settings_detail::UseElementTypes,
 			settings_detail::UseYUp,
 			settings_detail::WriteGltfEcef,
+			settings_detail::GltfExtras,
 			settings_detail::FloatingPointDigits,
 			settings_detail::BaseUri,
 			settings_detail::WktUseSection,
@@ -1077,6 +1085,7 @@ using geometry_setting_types = std::tuple<
 			using UseElementTypes = settings_detail::UseElementTypes;
 			using UseYUp = settings_detail::UseYUp;
 			using WriteGltfEcef = settings_detail::WriteGltfEcef;
+			using GltfExtras = settings_detail::GltfExtras;
 			using FloatingPointDigits = settings_detail::FloatingPointDigits;
 			using BaseUri = settings_detail::BaseUri;
 			using WktUseSection = settings_detail::WktUseSection;
