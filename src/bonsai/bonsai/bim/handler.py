@@ -417,27 +417,69 @@ def get_user(ifc: ifcopenshell.file) -> Union[ifcopenshell.entity_instance, None
         return pao
 
 
-def viewport_shading_changed_callback(area: bpy.types.Area) -> None:
-    shading_type = area.spaces.active.shading.type
+external_styles_draw_handler = None
+
+
+def sync_external_styles_for_space(space: bpy.types.SpaceView3D, scene: Union[bpy.types.Scene, None]) -> None:
+    """Keep material/external style state in sync with a 3D viewport's shading.
+
+    Shared by the draw handler below (covers any viewport, including ones
+    created mid-session, see #3296) and by call sites that want to force an
+    immediate refresh for a known set of areas (e.g. after loading a project).
+    """
+    shading_type = space.shading.type
     tool.Style.restore_material_style_types(shading_type)
     if shading_type == "SOLID":
-        area.spaces.active.shading.color_type = "MATERIAL"
+        space.shading.color_type = "MATERIAL"
+    if shading_type != "RENDERED":
+        return
+    if scene is None:
+        return
+    style_props = scene.BIMStylesProperties
+    if style_props.active_style_type != "External":
+        style_props.active_style_type = "External"
 
 
-def subscribe_to_viewport_shading_changes():
-    """Subscribe to changes in viewport shading mode"""
-    # NOTE: couldn't find a way to make it work for new areas too
-    # it starts working for them after blender restart though
-    for screen in bpy.data.screens:
-        for area in screen.areas:
-            if area.type != "VIEW_3D":
-                continue
-            shading = area.spaces.active.shading
-            key = shading.path_resolve("type", False)
+def viewport_shading_changed_callback(area: bpy.types.Area) -> None:
+    """Force-refresh style state for a single already-known area (e.g. right after project load)."""
+    sync_external_styles_for_space(area.spaces.active, bpy.context.scene)
 
-            bpy.msgbus.subscribe_rna(
-                key=key, owner=global_subscription_owner, args=(area,), notify=viewport_shading_changed_callback
-            )
+
+def sync_external_styles_on_viewport_draw() -> None:
+    """Keep material/external style state in sync with the active 3D viewport's shading.
+
+    This is a ``SpaceView3D.draw_handler_add`` callback, so it fires on every
+    redraw of every VIEW_3D area regardless of when that area was created.
+    Unlike a msgbus subscription installed once per known area (see #3296),
+    it needs no "new area" detection: any viewport that is ever drawn -
+    including ones split, duplicated, or converted to VIEW_3D during the
+    current session - is covered automatically.
+
+    Kept cheap (a couple of attribute reads and an early return) since it
+    runs on every viewport draw call; restore_material_style_types() itself
+    is a no-op unless the shading type actually changed.
+    """
+    space = bpy.context.space_data
+    if not isinstance(space, bpy.types.SpaceView3D):
+        return
+    sync_external_styles_for_space(space, bpy.context.scene)
+
+
+def install_external_styles_draw_handler() -> None:
+    global external_styles_draw_handler
+    if external_styles_draw_handler is not None:
+        return
+    external_styles_draw_handler = bpy.types.SpaceView3D.draw_handler_add(
+        sync_external_styles_on_viewport_draw, (), "WINDOW", "PRE_VIEW"
+    )
+
+
+def uninstall_external_styles_draw_handler() -> None:
+    global external_styles_draw_handler
+    if external_styles_draw_handler is None:
+        return
+    bpy.types.SpaceView3D.draw_handler_remove(external_styles_draw_handler, "WINDOW")
+    external_styles_draw_handler = None
 
 
 def _apply_save_file_invariants(scene: bpy.types.Scene) -> None:
@@ -469,8 +511,8 @@ def _apply_save_file_invariants(scene: bpy.types.Scene) -> None:
 
 
 def _apply_user_preferences() -> None:
-    """User-preference-driven UI setup: toolbar, BIM workspace, viewport shading
-    subscription, scene-panel hijack, tab layout, snap defaults."""
+    """User-preference-driven UI setup: toolbar, BIM workspace, scene-panel
+    hijack, tab layout, snap defaults."""
     preferences = tool.Blender.get_addon_preferences()
     if not preferences.should_setup_toolbar:
         tool.Blender.unregister_toolbar()
@@ -481,9 +523,6 @@ def _apply_user_preferences() -> None:
                 bpy.context.window.workspace = bpy.data.workspaces["BIM"]
         else:
             bpy.ops.workspace.append_activate(idname="BIM", filepath=os.path.join(cwd, "data", "workspace.blend"))
-
-    # After appending the workspace to ensure BIM viewport is affected.
-    subscribe_to_viewport_shading_changes()
 
     # To improve usability for new users, we hijack the scene properties
     # tab. We override default scene properties panels with our own poll
