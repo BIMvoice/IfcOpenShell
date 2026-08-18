@@ -173,9 +173,7 @@ void ifcopenshell::geom::iterator::flush_worker_log(ifcopenshell::geom::converte
 	}
 }
 
-void ifcopenshell::geom::iterator::process_finished_rep(geometry_conversion_result* rep, ifcopenshell::geom::converter* kernel) {
-	flush_worker_log(kernel);
-
+void ifcopenshell::geom::iterator::emit_finished_rep_(geometry_conversion_result* rep) {
 	if (rep->elements.empty()) {
 		return;
 	}
@@ -202,6 +200,11 @@ void ifcopenshell::geom::iterator::process_finished_rep(geometry_conversion_resu
 	progress_ = (int)(++processed_ * 100 / tasks_.size());
 }
 
+void ifcopenshell::geom::iterator::process_finished_rep(geometry_conversion_result* rep, ifcopenshell::geom::converter* kernel) {
+	flush_worker_log(kernel);
+	emit_finished_rep_(rep);
+}
+
 void ifcopenshell::geom::iterator::process_concurrently() {
 	size_t conc_threads = num_threads_;
 	if (conc_threads > tasks_.size()) {
@@ -224,6 +227,26 @@ void ifcopenshell::geom::iterator::process_concurrently() {
 
 	std::vector<std::future<geometry_conversion_result*>> threadpool;
 
+	// Results are emitted in a deterministic order (the input order of tasks_,
+	// which follows the products' file/step order) rather than in thread
+	// completion order. Completed tasks are buffered by their ordinal within
+	// tasks_ and the contiguous in-order prefix is flushed as it becomes ready,
+	// which keeps the streaming producer/consumer intact without deadlocking.
+	std::map<size_t, geometry_conversion_result*> ready_buffer;
+	size_t next_emit = 0;
+
+	auto buffer_and_flush = [this, &ready_buffer, &next_emit](geometry_conversion_result* finished) {
+		size_t ordinal = (size_t)(finished - tasks_.data());
+		ready_buffer[ordinal] = finished;
+		auto it = ready_buffer.find(next_emit);
+		while (it != ready_buffer.end()) {
+			emit_finished_rep_(it->second);
+			ready_buffer.erase(it);
+			++next_emit;
+			it = ready_buffer.find(next_emit);
+		}
+	};
+
 	for (auto& rep : tasks_) {
 		ifcopenshell::geom::converter* K = nullptr;
 		if (threadpool.size() < kernel_pool.size()) {
@@ -236,7 +259,11 @@ void ifcopenshell::geom::iterator::process_concurrently() {
 				std::future_status status;
 				status = fu.wait_for(std::chrono::seconds(0));
 				if (status == std::future_status::ready) {
-					process_finished_rep(fu.get(), kernel_pool[i]);
+					// Flush the worker log at completion time, but defer element
+					// emission to buffer_and_flush so output order stays deterministic.
+					geometry_conversion_result* finished = fu.get();
+					flush_worker_log(kernel_pool[i]);
+					buffer_and_flush(finished);
 
 					std::swap(threadpool[i], threadpool.back());
 					threadpool.pop_back();
@@ -284,8 +311,19 @@ void ifcopenshell::geom::iterator::process_concurrently() {
 	}
 
 	for (size_t i = 0; i < threadpool.size(); ++i) {
-		process_finished_rep(threadpool[i].get(), kernel_pool[i]);
+		geometry_conversion_result* finished = threadpool[i].get();
+		flush_worker_log(kernel_pool[i]);
+		buffer_and_flush(finished);
 	}
+
+	// Emit any results still buffered. In the normal case the contiguous flush
+	// above has already drained everything; this only matters on early
+	// termination, where a dispatch gap can leave completed tasks buffered.
+	// Emitting them (in ascending ordinal order) avoids leaking their elements.
+	for (auto& kv : ready_buffer) {
+		emit_finished_rep_(kv.second);
+	}
+	ready_buffer.clear();
 
 	finished_ = true;
 
