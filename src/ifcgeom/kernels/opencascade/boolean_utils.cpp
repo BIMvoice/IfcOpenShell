@@ -874,6 +874,27 @@ bool ifcopenshell::geom::util::boolean_operation(const boolean_settings& setting
 	return true;
 	*/
 
+	// #1366 Guard against null or empty operands before they reach OCCT.
+	// An operand that is null or carries no faces makes downstream OCCT
+	// routines dereference a null shape and crash rather than throw.
+	if (a_input.IsNull() || count(a_input, TopAbs_FACE) == 0) {
+		settings.log().warning("GEO", 155, "Empty or null first operand, skipping boolean operation");
+		result = a_input;
+		return !a_input.IsNull();
+	}
+
+	NCollection_List<TopoDS_Shape> b_input_filtered;
+	{
+		NCollection_List<TopoDS_Shape>::Iterator it(b_input);
+		for (; it.More(); it.Next()) {
+			if (!it.Value().IsNull() && count(it.Value(), TopAbs_FACE) > 0) {
+				b_input_filtered.Append(it.Value());
+			} else {
+				settings.log().warning("GEO", 156, "Skipping empty or null operand in boolean operation");
+			}
+		}
+	}
+
 	// @todo, it does seem a bit odd, we first triangulate non-planar faces
 	// to later unify them again. Can we make this a bit more intelligent?
 	TopoDS_Shape a;
@@ -893,7 +914,7 @@ bool ifcopenshell::geom::util::boolean_operation(const boolean_settings& setting
 		);
 
 		{
-			NCollection_List<TopoDS_Shape>::Iterator it(b_input);
+			NCollection_List<TopoDS_Shape>::Iterator it(b_input_filtered);
 			for (; it.More(); it.Next()) {
 				b.Append(unify(it.Value(), fuzziness));
 				settings.log().message(
@@ -907,7 +928,7 @@ bool ifcopenshell::geom::util::boolean_operation(const boolean_settings& setting
 		}
 	} else {
 		a = a_input;
-		b = b_input;
+		b = b_input_filtered;
 	}
 
 	bool is_2d = count(a, TopAbs_FACE) > 0 && count(a, TopAbs_SHELL) == 0;
