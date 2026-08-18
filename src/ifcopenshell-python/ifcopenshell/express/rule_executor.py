@@ -1,11 +1,13 @@
-import os
-import re
 import ast
 import collections
-import ifcopenshell
-from logging import Logger
+import os
+import re
 from dataclasses import dataclass
+from logging import Logger
+
 from codegen import indent
+
+import ifcopenshell
 
 
 def reverse_compile(s):
@@ -100,13 +102,19 @@ def run(f: ifcopenshell.file, logger: Logger) -> None:
     try:
         source = open(fn, "r").read()
     except FileNotFoundError as e:
+        import subprocess
         import sys
         import time
-        import subprocess
 
         current_dir_files = {fn.lower(): fn for fn in os.listdir(".")}
         schema_name = str(f.schema_identifier).split(" ")[-1].lower()
         schema_path = current_dir_files.get(schema_name + ".exp")
+        if schema_path is None:
+            ifcopenshell.settings.unpack_non_aggregate_inverses = orig
+            raise FileNotFoundError(
+                f"Couldn't find express rules for schema '{f.schema_identifier}': no precompiled rules and "
+                f"no '{schema_name}.exp' in the current folder '{os.getcwd()}'."
+            ) from e
         fn = schema_path[:-4] + ".py"
         if not os.path.exists(fn):
             subprocess.run([sys.executable, "-m", "ifcopenshell.express.rule_compiler", schema_path, fn], check=True)
@@ -282,9 +290,10 @@ def run(f: ifcopenshell.file, logger: Logger) -> None:
 
 
 if __name__ == "__main__":
-    import sys
     import json
     import logging
+    import sys
+
     import ifcopenshell
     from ifcopenshell.validate import json_logger
 
