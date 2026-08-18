@@ -232,7 +232,14 @@ def extract_docs(module: str, usecase: str) -> dict[str, Any]:
 
 def serialise_settings(settings):
     def serialise_entity_instance(entity):
-        return {"cast_type": "entity_instance", "value": entity.id(), "Name": getattr(entity, "Name", None)}
+        # entity.id() raises if the underlying instance was since deleted.
+        try:
+            entity_id = entity.id()
+        except RuntimeError:
+            return {"cast_type": "entity_instance", "value": None, "Name": "<stale reference>"}
+        if entity_id == 0:
+            return {"cast_type": "entity_instance", "value": None, "Name": "<stale reference>"}
+        return {"cast_type": "entity_instance", "value": entity_id, "Name": getattr(entity, "Name", None)}
 
     vcs_settings = settings.copy()
     for key, value in settings.items():
