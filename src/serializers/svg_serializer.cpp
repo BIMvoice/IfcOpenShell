@@ -2854,8 +2854,10 @@ void svg_serializer::setSectionHeightsFromStoreys(double offset) {
 	auto storeys = file->instances_by_type("IfcBuildingStorey");
 	const double lu = file->get_unit("LENGTHUNIT").second;
     if (!storeys.empty()) {
-        for (auto& s : storeys) {
-            auto attr_value = s.as<express::entity>().get("Elevation");
+        auto mapping = ifcopenshell::geom::impl::mapping_implementations().construct(file, settings_, logger());
+        for (auto& s_ : storeys) {
+            auto s = s_.as<express::entity>();
+            auto attr_value = s.get("Elevation");
             if (!attr_value.isNull()) {
                 double elev;
                 try {
@@ -2864,12 +2866,27 @@ void svg_serializer::setSectionHeightsFromStoreys(double offset) {
                     logger().error("SER", 33, e);
                     continue;
                 }
-                if (!section_data_->empty()) {
-                    boost::get<horizontal_plan>(section_data_->back()).next_elevation = elev * lu;
+                // Prefer the storey's globally resolved placement Z over the raw
+                // Elevation attribute, which ignores ancestor placements (#2638).
+                double elev_global = elev * lu;
+                auto placement = s.get("ObjectPlacement");
+                if (mapping && !placement.isNull()) {
+                    auto item = mapping->map(placement);
+                    auto matrix = ifcopenshell::geom::taxonomy::cast<ifcopenshell::geom::taxonomy::matrix4>(item);
+                    if (matrix) {
+                        elev_global = matrix->translation_part()(2);
+#ifdef TAXONOMY_USE_NAKED_PTR
+                        delete matrix;
+#endif
+                    }
                 }
-                section_data_->push_back(horizontal_plan{s, elev * lu, offset, std::numeric_limits<double>::infinity()});
+                if (!section_data_->empty()) {
+                    boost::get<horizontal_plan>(section_data_->back()).next_elevation = elev_global;
+                }
+                section_data_->push_back(horizontal_plan{s_, elev_global, offset, std::numeric_limits<double>::infinity()});
             }
         }
+        delete mapping;
 	} else {
 		section_data_->push_back(horizontal_plan_at_element{});
 	}
