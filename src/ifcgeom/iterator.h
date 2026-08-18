@@ -133,6 +133,7 @@ namespace ifcopenshell::geom {
 		ifcopenshell::file* ifc_file;
 		std::vector<ifcopenshell::geom::filter_function> filters_;
 		int num_threads_;
+		bool no_progress_ = false;
 		std::string geometry_library_;
 		ifcopenshell::logger& logger_;
 
@@ -222,6 +223,11 @@ namespace ifcopenshell::geom {
 		}
 
 		~iterator();
+
+		// When set, suppresses the carriage-return status line emitted by the
+		// concurrent (multi-threaded) processing path so that callers passing
+		// --no-progress get consistent output regardless of thread count.
+		void suppress_progress(bool b = true) { no_progress_ = b; }
 
 		std::vector<ifcopenshell::geom::taxonomy::item::ptr> get_task_items() const {
 			std::vector<ifcopenshell::geom::taxonomy::item::ptr> items;
