@@ -71,7 +71,8 @@ class Patcher:
     def patch(self):
         keys: dict[Any, ifcopenshell.entity_instance] = {}
         for element_type in self.file.by_type("IfcTypeObject"):
-            key = getattr(element_type, self.attribute)
+            # Not every subtype has this attribute, e.g. IfcTypeProcess.
+            key = getattr(element_type, self.attribute, None)
             if not key and not self.should_merge_null:
                 continue
             original_type = keys.get(key, None)

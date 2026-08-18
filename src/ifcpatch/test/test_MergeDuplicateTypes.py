@@ -84,3 +84,17 @@ class TestMergeDuplicateTypes(test.bootstrap.IFC4):
 
 class TestMergeDuplicateTypesIFC2X3(test.bootstrap.IFC2X3, TestMergeDuplicateTypes):
     pass
+
+
+class TestMergeDuplicateTypesMissingAttribute(test.bootstrap.IFC4):
+    def test_types_without_the_merge_attribute_are_not_crashed_on(self):
+        # IfcTypeProcess (unlike IfcTypeProduct) has no Tag attribute at
+        # all. IfcTypeProcess is IFC4-only, so this is not shared with the
+        # IFC2X3 test class above.
+        event_type1 = ifcopenshell.api.root.create_entity(self.file, ifc_class="IfcEventType")
+        event_type2 = ifcopenshell.api.root.create_entity(self.file, ifc_class="IfcEventType")
+        # should_merge_null=False so this test only checks that a missing
+        # attribute does not crash, independent of the default merge-null
+        # behaviour (which defaults to True on v0.9.0, unlike v0.8.0).
+        output = ifcpatch.execute({"file": self.file, "recipe": "MergeDuplicateTypes", "arguments": ["Tag", False]})
+        assert len(output.by_type("IfcEventType")) == 2
