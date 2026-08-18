@@ -121,6 +121,11 @@ option(
 )
 
 option(WITH_OPENCASCADE "Enable geometry interpretation using Open CASCADE" ON)
+option(
+    INSTALL_DEPENDENCY_HEADERS
+    "Also install Open CASCADE headers into the IfcOpenShell install tree, so the install directory is self-sufficient for C++ consumers (#3164)."
+    ON
+)
 option(WITH_CGAL "Enable geometry interpretation using CGAL" ON)
 option(WITH_MANIFOLD "Enable geometry interpretation using Manifold" OFF)
 option(COLLADA_SUPPORT "Build IfcConvert with COLLADA support (requires OpenCOLLADA)." ON)
@@ -260,6 +265,14 @@ if(BUILD_IFCGEOM AND WITH_OPENCASCADE)
     set(OpenCASCADE_LIBRARIES ${OpenCASCADE_LIBRARIES})
     set(SWIG_DEFINES ${SWIG_DEFINES} -DIFOPSH_WITH_OPENCASCADE)
     list(APPEND GEOMETRY_KERNELS opencascade)
+
+    # Make the install tree self-sufficient for C++ consumers, see #3164.
+    if(INSTALL_DEPENDENCY_HEADERS AND OpenCASCADE_INCLUDE_DIR)
+        install(
+            DIRECTORY "${OpenCASCADE_INCLUDE_DIR}/"
+            DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/external/occt-${OpenCASCADE_VERSION}"
+        )
+    endif()
 endif()
 
 message(STATUS "BUILD_IFCGEOM WITH_MANIFOLD: ${BUILD_IFCGEOM} ${WITH_MANIFOLD}")
