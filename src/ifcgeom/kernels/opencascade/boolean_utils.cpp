@@ -832,8 +832,14 @@ bool ifcopenshell::geom::util::points_on_planar_face_generator::operator()(gp_Pn
 }
 
 
-bool ifcopenshell::geom::util::boolean_operation(const boolean_settings& settings, const TopoDS_Shape& a_input, const NCollection_List<TopoDS_Shape>& b_input, BOPAlgo_Operation op, TopoDS_Shape& result, double fuzziness) {
+bool ifcopenshell::geom::util::boolean_operation(const boolean_settings& settings, const TopoDS_Shape& a_input, const NCollection_List<TopoDS_Shape>& b_input, BOPAlgo_Operation op, TopoDS_Shape& result, double fuzziness, bool allow_nonmanifold_fallback) {
 	using namespace std::string_literals;
+
+	// A geometrically valid (BRepCheck_Analyzer) subtraction result that is
+	// rejected only for being non-manifold is remembered here. Some real models
+	// can only be resolved into such a result; keeping it is better than
+	// silently discarding the whole cut (#1015).
+	TopoDS_Shape nonmanifold_fallback;
 
 	const bool do_unify = true;
 	const bool do_subtraction_eliminate_disjoint_bbox = true;
@@ -1376,6 +1382,11 @@ bool ifcopenshell::geom::util::boolean_operation(const boolean_settings& setting
 
 				} else {
 					settings.log().notice("GEO", 151, "Boolean operation yields non-manifold result");
+					// r passed BRepCheck_Analyzer above and was rejected solely for
+					// being non-manifold. Remember it as a last-resort fallback (#1015).
+					if (op == BOPAlgo_CUT && nonmanifold_fallback.IsNull() && !r.IsNull()) {
+						nonmanifold_fallback = r;
+					}
 				}
 			}
 		}
@@ -1403,9 +1414,24 @@ bool ifcopenshell::geom::util::boolean_operation(const boolean_settings& setting
 	}
 	if (!success) {
 		if (allow_retry) {
-			return boolean_operation(settings, a, b, op, result, new_fuzziness);
+			// Retry at a higher fuzziness in the hope of a clean manifold result.
+			// The retry is not allowed to apply the non-manifold fallback itself:
+			// that decision is deferred to this (finer-fuzziness) frame so that,
+			// if every retry also fails, the most accurate fallback is used.
+			if (boolean_operation(settings, a, b, op, result, new_fuzziness, false)) {
+				return true;
+			}
 		} else {
 			settings.log().notice("GEO", 154, "No longer attempting boolean operation with higher fuzziness");
+		}
+
+		if (allow_nonmanifold_fallback && !nonmanifold_fallback.IsNull()) {
+			// Every attempt failed the manifold check but produced a geometrically
+			// valid subtraction. Keeping it preserves the boolean cut instead of
+			// silently returning the un-subtracted first operand (#1015).
+			settings.log().message(ifcopenshell::logger::LOG_WARNING, "GEO", 155, "Boolean subtraction result is non-manifold, using it regardless to preserve the cut");
+			result = nonmanifold_fallback;
+			return true;
 		}
 	}
 	return success && !result.IsNull();
