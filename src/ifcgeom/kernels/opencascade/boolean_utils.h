@@ -102,7 +102,7 @@ namespace ifcopenshell::geom {
 			ifcopenshell::logger& log() const { return logger ? *logger : ifcopenshell::logger::root(); }
 		};
 
-		IFC_GEOMLIBRARY_API bool boolean_operation(const boolean_settings& settings, const TopoDS_Shape&, const NCollection_List<TopoDS_Shape>&, BOPAlgo_Operation, TopoDS_Shape&, double fuzziness = -1.);
+		IFC_GEOMLIBRARY_API bool boolean_operation(const boolean_settings& settings, const TopoDS_Shape&, const NCollection_List<TopoDS_Shape>&, BOPAlgo_Operation, TopoDS_Shape&, double fuzziness = -1., bool heal_operand_on_failure = true);
 
 		IFC_GEOMLIBRARY_API bool boolean_operation(const boolean_settings& settings, const TopoDS_Shape&, const TopoDS_Shape&, BOPAlgo_Operation, TopoDS_Shape&, double fuzziness = -1.);
 
