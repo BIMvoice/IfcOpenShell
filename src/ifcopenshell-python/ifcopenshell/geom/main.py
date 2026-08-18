@@ -412,11 +412,22 @@ class tree(ifcopenshell_wrapper.tree):
         value: Union[entity_instance, ifcopenshell_wrapper.native_element, tuple[float, float, float]],
         **kwargs,
     ) -> list[entity_instance]:
+        def is_point_triple(value):
+            return (
+                isinstance(value, (list, tuple))
+                and len(value) == 3
+                and all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in value)
+            )
+
         def unwrap(value):
             if isinstance(value, entity_instance):
                 return value
             elif all(map(lambda v: hasattr(value, v), "XYZ")):
                 return value.X(), value.Y(), value.Z()
+            elif is_point_triple(value):
+                # Coordinates need to be actual floats, otherwise SWIG cannot
+                # resolve the gp_Pnt overload and raises a confusing TypeError.
+                return tuple(float(v) for v in value)
             return value
 
         args = [self, unwrap(value)]
@@ -424,17 +435,24 @@ class tree(ifcopenshell_wrapper.tree):
             args.append(kwargs.get("completely_within", False))
             if "extend" in kwargs:
                 args.append(kwargs["extend"])
-        elif isinstance(value, (list, tuple)) and len(value) == 3 and set(map(type, value)) == {float}:
+        elif is_point_triple(value):
             if "extend" in kwargs:
                 args.append(kwargs["extend"])
         return ifcopenshell_wrapper.tree.select(*args)
 
     def select_box(self, value, **kwargs) -> list[entity_instance]:
+        def is_coord_triple(v):
+            return isinstance(v, (list, tuple)) and len(v) == 3 and all(isinstance(c, (int, float)) for c in v)
+
         def unwrap(value):
             if isinstance(value, entity_instance):
                 return value
             elif hasattr(value, "Get"):
                 return value.Get()[:3], value.Get()[3:]
+            elif isinstance(value, (list, tuple)) and len(value) == 2 and all(map(is_coord_triple, value)):
+                # Coordinates need to be actual floats, otherwise the Bnd_Box
+                # typemap cannot resolve and raises a confusing TypeError.
+                return tuple(tuple(float(c) for c in corner) for corner in value)
             return value
 
         args = [self, unwrap(value)]
