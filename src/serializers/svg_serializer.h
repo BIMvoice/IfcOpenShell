@@ -217,12 +217,18 @@ namespace {
 		// classified pre-HLR on the original (real-face) topology. Empty class string means
 		// "unclassified" (used for the two fallback cases below).
 		const std::list<std::tuple<express::base, std::string, TopoDS_Shape>>* classified_shapes_ = nullptr;
+		// Issue #6424: also extract the occluded counterparts of every visible query below.
+		bool emit_hidden_ = false;
 
 	public:
 		typedef std::list<std::tuple<express::base, std::string, TopoDS_Shape>> result_type;
 
 		hlr_calc(const HLRAlgo_Projector& projector) : projector_(projector)
 		{}
+
+		void set_emit_hidden(bool b) {
+			emit_hidden_ = b;
+		}
 
 		void set_product_shape(const std::list<std::pair<express::base, TopoDS_Shape>>* product_shapes) {
 			product_shapes_ = product_shapes;
@@ -232,18 +238,37 @@ namespace {
 			classified_shapes_ = classified_shapes;
 		}
 
+		// Issue #6424: occluded counterpart of a visible entry, emitted before it so hidden
+		// linework is painted underneath. Class is "hidden", suffixed with the edge class.
+		template <typename ShapeT>
+		void push_hidden(result_type& r, express::base product, const std::string& cls, ShapeT&& hidden) {
+			if (!TopExp_Explorer(hidden, TopAbs_EDGE).More()) {
+				return;
+			}
+			r.push_back({ product, cls.empty() ? std::string("hidden") : "hidden " + cls, std::forward<ShapeT>(hidden) });
+		}
+
 		template <typename HlrToShapeT>
 		result_type extract(HlrToShapeT& hlr_shapes) {
 			result_type r;
 			if (classified_shapes_ && !classified_shapes_->empty()) {
 				for (auto& t : *classified_shapes_) {
+					if (emit_hidden_) {
+						push_hidden(r, std::get<0>(t), std::get<1>(t), occt_join(hlr_shapes.OutLineHCompound(std::get<2>(t)), hlr_shapes.HCompound(std::get<2>(t))));
+					}
 					r.push_back({ std::get<0>(t), std::get<1>(t), occt_join(hlr_shapes.OutLineVCompound(std::get<2>(t)), hlr_shapes.VCompound(std::get<2>(t))) });
 				}
 			} else if (product_shapes_) {
 				for (auto& p : *product_shapes_) {
+					if (emit_hidden_) {
+						push_hidden(r, p.first, std::string(), occt_join(hlr_shapes.OutLineHCompound(p.second), hlr_shapes.HCompound(p.second)));
+					}
 					r.push_back({ p.first, std::string(), occt_join(hlr_shapes.OutLineVCompound(p.second), hlr_shapes.VCompound(p.second)) });
 				}
 			} else {
+				if (emit_hidden_) {
+					push_hidden(r, express::base{}, std::string(), occt_join(hlr_shapes.OutLineHCompound(), hlr_shapes.HCompound()));
+				}
 				r.push_back({ express::base{}, std::string(), occt_join(hlr_shapes.OutLineVCompound(), hlr_shapes.VCompound()) });
 			}
 			return r;
@@ -370,6 +395,7 @@ namespace {
 
 		hlr_brep_or_poly_t engine_;
 		bool use_prefiltering_;
+		bool emit_hidden_;
 		bool use_hlr_poly_;
 		bool segment_projection_;
 		gp_Ax1 view_direction_;
@@ -384,8 +410,10 @@ namespace {
 
 	public:
 
-		prefiltered_hlr(ifcopenshell::logger& logger, bool use_prefiltering, bool use_hlr_poly, bool segment_projection, const gp_Pln& view_direction)
-			: use_prefiltering_(use_prefiltering)
+		prefiltered_hlr(ifcopenshell::logger& logger, bool use_prefiltering, bool use_hlr_poly, bool segment_projection, const gp_Pln& view_direction, bool emit_hidden = false)
+			// Issue #6424: prefiltering drops exactly the geometry hidden lines need.
+			: use_prefiltering_(use_prefiltering && !emit_hidden)
+			, emit_hidden_(emit_hidden)
 			, use_hlr_poly_(use_hlr_poly)
 			, segment_projection_(segment_projection)
 			// @nb negative z in accordance with occt projector convention (and opengl)
@@ -547,6 +575,7 @@ namespace {
 				vis.set_product_shape(&items_);
 			}
 			vis.set_classified_shapes(&classified_items_);
+			vis.set_emit_hidden(emit_hidden_);
 			return boost::apply_visitor(vis, engine_);
 		}
 	};
@@ -597,6 +626,7 @@ protected:
 	bool svg_use_edge_classification_;
 	bool svg_render_crease_edges_;
 	bool svg_render_sharp_edges_;
+	bool svg_render_hidden_edges_;
 
 	ifcopenshell::file* file;
 	express::base storey_;
@@ -658,6 +688,7 @@ public:
 		, svg_use_edge_classification_(false)
 		, svg_render_crease_edges_(true)
 		, svg_render_sharp_edges_(true)
+		, svg_render_hidden_edges_(false)
 		, file(0)
 		, xcoords_begin(0)
 		, ycoords_begin(0)

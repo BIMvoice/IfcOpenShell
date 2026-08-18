@@ -392,6 +392,12 @@ namespace ifcopenshell {
 				static constexpr bool defaultvalue = true;
 			};
 
+			struct SvgRenderHiddenEdges : public SettingBase<SvgRenderHiddenEdges, bool> {
+				static constexpr const char* const name = "svg-render-hidden-edges";
+				static constexpr const char* const description = "Emit the occluded (hidden) portions of projected linework as additional paths carrying the 'hidden' CSS class, so elements that sit entirely behind others still appear on the drawing. Defaults to false.";
+				static constexpr bool defaultvalue = false;
+			};
+
 			struct KeepBoundingBoxes : public SettingBase<KeepBoundingBoxes, bool> {
 				static constexpr const char* const name = "keep-bounding-boxes";
 				static constexpr const char* const description = "Default is to removes IfcBoundingBox from model prior to converting geometry.Setting this option disables that behaviour";
@@ -949,6 +955,7 @@ using geometry_setting_types = std::tuple<
 			settings_detail::SvgUseEdgeClassification,
 			settings_detail::SvgRenderCreaseEdges,
 			settings_detail::SvgRenderSharpEdges,
+			settings_detail::SvgRenderHiddenEdges,
 			settings_detail::KeepBoundingBoxes,
 			settings_detail::ComputeCurvature,
 			settings_detail::FunctionStepType,
@@ -1053,6 +1060,7 @@ using geometry_setting_types = std::tuple<
 			using SvgUseEdgeClassification = settings_detail::SvgUseEdgeClassification;
 			using SvgRenderCreaseEdges = settings_detail::SvgRenderCreaseEdges;
 			using SvgRenderSharpEdges = settings_detail::SvgRenderSharpEdges;
+			using SvgRenderHiddenEdges = settings_detail::SvgRenderHiddenEdges;
 			using KeepBoundingBoxes = settings_detail::KeepBoundingBoxes;
 			using ComputeCurvature = settings_detail::ComputeCurvature;
 			using FunctionStepType = settings_detail::FunctionStepType;
