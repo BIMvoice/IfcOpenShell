@@ -384,7 +384,14 @@ void ifcopenshell::geom::cgal_shape::triangulate(ifcopenshell::geom::settings se
 	}
 
 	const bool setting_use_original_edges = settings.get<ifcopenshell::geom::settings::CgalEmitOriginalEdges>().get();
-	
+
+	// When a polyhedral triangulation type is requested we do not emit a raw
+	// triangle mesh, but reconstruct planar faces (optionally with holes) from
+	// the coplanar triangle components, mirroring the OpenCascade kernel.
+	const auto triangulation_type = settings.get<ifcopenshell::geom::settings::TriangulationType>().get();
+	const bool polyhedral_output = triangulation_type != ifcopenshell::geom::settings::TRIANGLE_MESH;
+	const bool polyhedral_output_without_holes = triangulation_type == ifcopenshell::geom::settings::POLYHEDRON_WITHOUT_HOLES;
+
 	std::set<std::set<kernel_::Point_3>> original_edges;
 	if (setting_use_original_edges) {
 		for (auto it = shape_to_use->edges_begin(); it != shape_to_use->edges_end(); ++it) {
@@ -446,7 +453,7 @@ void ifcopenshell::geom::cgal_shape::triangulate(ifcopenshell::geom::settings se
 	// edges are to be registered.
 	std::vector<std::set<facet_const_handle>> components;
 	std::map<facet_const_handle, typename decltype(components)::const_iterator> facet_to_component;
-	if (!setting_use_original_edges) {
+	if (!setting_use_original_edges || polyhedral_output) {
 		partition_coplanar_components(*shape_to_use, components);
 		for (auto it = components.begin(); it != components.end(); ++it) {
 			for (auto& f : *it) {
@@ -476,6 +483,10 @@ void ifcopenshell::geom::cgal_shape::triangulate(ifcopenshell::geom::settings se
 	std::map<postion_normal, size_t> welds;
 
 	std::set<std::pair<int, int>> registered_edges;
+
+	// For polyhedral output the triangles are accumulated per coplanar component
+	// so that planar faces (optionally with holes) can be reconstructed after the loop.
+	std::map<typename decltype(components)::const_iterator, std::vector<std::tuple<int, int, int>>> component_triangles;
 
 	int num_faces = 0, num_vertices = 0;
 	for (auto &face : faces(*shape_to_use)) {
@@ -562,26 +573,47 @@ void ifcopenshell::geom::cgal_shape::triangulate(ifcopenshell::geom::settings se
 			++current_halfedge;
 		} while (current_halfedge != face->facet_begin());
 
-		t->addFace(item_id, surface_style_id, vertexidx[0], vertexidx[1], vertexidx[2]);
-		for (size_t boundary_index = 0; boundary_index < 3; ++boundary_index) {
-			if (is_face_boundary[boundary_index]) {
-				// In CGAL, the vertex of a halfedge is the incident vertex, i.e
-				// the second vertex of the edge, so in order to get corresponding
-				// vertex and edge indices we need to find vertexids (i-1, i) for
-				// the boundary registered in i.
-				auto a = vertexidx[(boundary_index + 2) % 3];
-				auto b = vertexidx[(boundary_index + 3) % 3];
-				if (a > b) {
-					std::swap(a, b);
-				}
-				if (registered_edges.find({ a, b }) == registered_edges.end()) {
-					registered_edges.insert({ a,b });
-					t->registerEdge(item_id, a, b);
+		if (polyhedral_output) {
+			component_triangles[facet_to_component[face]].push_back({ vertexidx[0], vertexidx[1], vertexidx[2] });
+		} else {
+			t->addFace(item_id, surface_style_id, vertexidx[0], vertexidx[1], vertexidx[2]);
+			for (size_t boundary_index = 0; boundary_index < 3; ++boundary_index) {
+				if (is_face_boundary[boundary_index]) {
+					// In CGAL, the vertex of a halfedge is the incident vertex, i.e
+					// the second vertex of the edge, so in order to get corresponding
+					// vertex and edge indices we need to find vertexids (i-1, i) for
+					// the boundary registered in i.
+					auto a = vertexidx[(boundary_index + 2) % 3];
+					auto b = vertexidx[(boundary_index + 3) % 3];
+					if (a > b) {
+						std::swap(a, b);
+					}
+					if (registered_edges.find({ a, b }) == registered_edges.end()) {
+						registered_edges.insert({ a,b });
+						t->registerEdge(item_id, a, b);
+					}
 				}
 			}
 		}
 
 		++num_faces;
+	}
+
+	if (polyhedral_output) {
+		// Reconstruct a planar face per coplanar component from its triangles,
+		// honouring the requested POLYHEDRON_WITHOUT_HOLES / POLYHEDRON_WITH_HOLES type.
+		for (auto& component : component_triangles) {
+			auto loops = ifcopenshell::geom::util::find_boundary_loops(t->verts(), component.second);
+			if (polyhedral_output_without_holes) {
+				if (!loops.empty() && !loops[0].empty()) {
+					t->addFace(item_id, surface_style_id, loops[0]);
+				}
+			} else {
+				if (!loops.empty()) {
+					t->addFace(item_id, surface_style_id, loops);
+				}
+			}
+		}
 	}
 
 }
