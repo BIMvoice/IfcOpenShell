@@ -31,6 +31,7 @@
 #include "../../ifcparse/logger.h"
 #include "../../ifcparse/file.h"
 #include "../../ifcparse/si_prefix.h"
+#include "../../ifcparse/exception.h"
 
 #include <boost/algorithm/string.hpp>
 #include <boost/spirit/home/x3.hpp>
@@ -880,7 +881,12 @@ void mapping::initialize_units_() {
     IfcSchema::IfcUnitAssignment unit_assignment;
     if (projects.size() == 1) {
         auto& project = projects.front();
-        unit_assignment = project.UnitsInContext();
+        try {
+            // UnitsInContext is mandatory per schema, but lenient parsing may leave it unset on malformed files.
+            unit_assignment = project.UnitsInContext();
+        } catch (const ifcopenshell::exception& ex) {
+            logger_.warning("GEO", 308, std::string("Invalid UnitsInContext: ") + ex.what());
+        }
     } else {
         logger_.warning("GEO", 308, "Not a single project or context in file");
     }
