@@ -543,14 +543,13 @@ namespace {
 	std::optional<std::pair<express::base, double>> storey_elevation_from_element(const ifcopenshell::geom::native_element* o) {
 		for (const auto& p : o->parents()) {
 			if (p->type() == "IfcBuildingStorey") {
-				try {
-					double e = p->product().get("Elevation");
-					double storey_elevation = e * o->geometry().settings().get<ifcopenshell::geom::settings::LengthUnit>().get();
-					return std::make_pair(p->product(), storey_elevation);
-				} catch (...) {
-					continue;
-				}
-				break;
+				// Prefer the storey's globally-resolved placement Z over the
+				// Elevation attribute, which ignores any Z-offset contributed
+				// by ancestor placements and would place the section cut
+				// plane at the wrong height (#1231/#4828).
+				const auto& m = p->transformation().data()->ccomponents();
+				double storey_elevation = m(2, 3);
+				return std::make_pair(p->product(), storey_elevation);
 			}
 		}
 		return std::nullopt;
