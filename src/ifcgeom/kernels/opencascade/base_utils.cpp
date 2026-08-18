@@ -101,6 +101,30 @@ int ifcopenshell::geom::util::surface_genus(const TopoDS_Shape& s) {
 }
 
 bool ifcopenshell::geom::util::is_manifold(const TopoDS_Shape& a) {
+	if (a.ShapeType() == TopAbs_COMPOUND && is_compound_of_faces(a)) {
+		// A loose compound of faces (no enclosing shell) would evaluate every face
+		// in isolation and always report non-manifold. Gather into an oriented
+		// shell and test that instead (#8105).
+		NCollection_List<TopoDS_Shape> faces;
+		shape_to_face_list(a, faces);
+
+		BRep_Builder builder;
+		TopoDS_Shell shell;
+		builder.MakeShell(shell);
+		for (NCollection_List<TopoDS_Shape>::Iterator fit(faces); fit.More(); fit.Next()) {
+			builder.Add(shell, fit.Value());
+		}
+
+		ShapeFix_Shell fix;
+		fix.FixFaceOrientation(shell);
+		const TopoDS_Shape oriented = fix.Shape();
+
+		if (is_compound_of_faces(oriented) || count(oriented, TopAbs_SHELL) == 0) {
+			return false;
+		}
+		return is_manifold(oriented);
+	}
+
 	if (a.ShapeType() == TopAbs_COMPOUND || a.ShapeType() == TopAbs_SOLID) {
 		TopoDS_Iterator it(a);
 		for (; it.More(); it.Next()) {
