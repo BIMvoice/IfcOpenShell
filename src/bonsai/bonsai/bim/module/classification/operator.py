@@ -77,10 +77,14 @@ class AddManualClassificationReference(bpy.types.Operator, tool.Ifc.Operator):
 
     def _execute(self, context):
         if self.obj_type == "Object":
-            if context.selected_objects:
+            if self.obj:
+                objects = [self.obj]
+            elif context.selected_objects:
                 objects = [o.name for o in context.selected_objects]
-            else:
+            elif context.active_object:
                 objects = [context.active_object.name]
+            else:
+                objects = []
         else:
             objects = [self.obj]
         props = tool.Classification.get_classification_reference_props()
@@ -284,12 +288,15 @@ class RemoveClassificationReference(bpy.types.Operator, tool.Ifc.Operator):
     obj_type: bpy.props.StringProperty()
 
     def _execute(self, context):
-        obj = bpy.data.objects.get(self.obj) if self.obj else context.active_object
         if self.obj_type == "Object":
-            if context.selected_objects:
+            if self.obj:
+                objects = [self.obj]
+            elif context.selected_objects:
                 objects = [o.name for o in context.selected_objects]
-            else:
+            elif context.active_object:
                 objects = [context.active_object.name]
+            else:
+                objects = []
         else:
             objects = [self.obj]
 
@@ -348,7 +355,10 @@ class AddClassificationReference(bpy.types.Operator, tool.Ifc.Operator):
 
     def _execute(self, context):
         if self.obj_type == "Object":
-            objects = [o.name for o in tool.Blender.get_selected_objects()]
+            if self.obj:
+                objects = [self.obj]
+            else:
+                objects = [o.name for o in tool.Blender.get_selected_objects()]
         else:
             objects = [self.obj]
         props = tool.Classification.get_classification_props()
@@ -386,10 +396,14 @@ class AddClassificationReferenceFromBSDD(bpy.types.Operator, tool.Ifc.Operator):
 
     def _execute(self, context):
         if self.obj_type == "Object":
-            if context.selected_objects:
+            if self.obj:
+                objects = [self.obj]
+            elif context.selected_objects:
                 objects = [o.name for o in context.selected_objects]
-            else:
+            elif context.active_object:
                 objects = [context.active_object.name]
+            else:
+                objects = []
         else:
             objects = [self.obj]
         bprops = tool.Bsdd.get_bsdd_props()
