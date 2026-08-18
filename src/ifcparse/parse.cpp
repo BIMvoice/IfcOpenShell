@@ -42,6 +42,7 @@
 #include <iomanip>
 #include <charconv>
 #include <type_traits>
+#include <stdexcept>
 
 // Apple clang's libc++ has no floating-point std::from_chars overload (it's
 // =deleted), so on macOS doubles are parsed via strtod_l with a cached "C"
@@ -2194,6 +2195,14 @@ std::optional<std::tuple<size_t, const ifcopenshell::declaration*, shared_pointe
                 logger_.get().message(ifcopenshell::logger::LOG_ERROR, std::string(ex.what()) + " at offset " + std::to_string(token_stream_[2].start_pos));
                 current_id = 0;
                 goto advance;
+            } catch (const std::out_of_range&) {
+                // #6750 A malformed keyword / entity name containing a stray
+                // apostrophe makes the character decoder scan past the end of the
+                // buffer, which surfaces as std::out_of_range from the reader.
+                // Recover instead of letting it escape and crash the process.
+                logger_.get().message(ifcopenshell::logger::LOG_ERROR, "Premature end of file while reading entity name at offset " + std::to_string(token_stream_[2].start_pos));
+                current_id = 0;
+                goto advance;
             }
 
             if (entity_type->as_entity() == nullptr) {
@@ -2225,6 +2234,16 @@ std::optional<std::tuple<size_t, const ifcopenshell::declaration*, shared_pointe
             } catch (const invalid_token_exception& e) {
                 good_ = file_open_status::INVALID_SYNTAX;
                 logger_.get().error(e);
+                break;
+            } catch (const std::out_of_range&) {
+                // #6750 Premature end of file while reading an instance's
+                // attributes, e.g. an unterminated string literal ('...) or an
+                // attribute value containing a stray apostrophe that sends the
+                // character decoder scanning past the end of the buffer. Treat as
+                // a syntax error and stop rather than letting the exception escape
+                // read_instance() and crash the process.
+                good_ = file_open_status::INVALID_SYNTAX;
+                logger_.get().message(ifcopenshell::logger::LOG_ERROR, "Premature end of file while reading instance #" + std::to_string(current_id));
                 break;
             }
         }
