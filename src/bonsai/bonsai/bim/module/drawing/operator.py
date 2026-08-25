@@ -68,8 +68,6 @@ import bonsai.core.drawing as core
 import bonsai.core.geometry
 import bonsai.tool as tool
 from bonsai.bim.ifc import IfcStore
-from bonsai.bim.module.model.decorator import PolylineDecorator
-from bonsai.bim.module.model.polyline import PolylineOperator
 from bonsai.bim.module.drawing.data import DecoratorData, ElementValuesData
 from bonsai.bim.module.drawing.decoration import CutDecorator
 from bonsai.bim.module.drawing.prop import (
@@ -77,6 +75,8 @@ from bonsai.bim.module.drawing.prop import (
     RasterStyleProperty,
 )
 from bonsai.bim.module.drawing.ui import get_current_product_for_element_values
+from bonsai.bim.module.model.decorator import PolylineDecorator
+from bonsai.bim.module.model.polyline import PolylineOperator
 from bonsai.bim.prop import StrProperty
 
 if TYPE_CHECKING:
@@ -2709,7 +2709,10 @@ class ActivateDrawingBase(tool.Ifc.Operator):
         group = tool.Drawing.get_drawing_group(drawing_element)
         if group:
             for annotation in tool.Drawing.get_group_elements(group) or []:
-                if annotation.is_a("IfcAnnotation") and ifcopenshell.util.element.get_predefined_type(annotation) == "SECTION":
+                if (
+                    annotation.is_a("IfcAnnotation")
+                    and ifcopenshell.util.element.get_predefined_type(annotation) == "SECTION"
+                ):
                     ann_obj = tool.Ifc.get_object(annotation)
                     if ann_obj:
                         tool.Drawing.update_section_endpoints(ann_obj, camera)
@@ -5712,15 +5715,15 @@ class DrawParametricDimension(bpy.types.Operator, PolylineOperator, tool.Ifc.Ope
         self._anchors = []
         self._shape_cache = {}
         self._force_perpendicular = False
-        self._anchor0_normal = None   # (nx, ny, nz) world-space face normal of anchor[0]
-        self._anchor0_pt = None       # (x, y, z) world-space position of anchor[0]
+        self._anchor0_normal = None  # (nx, ny, nz) world-space face normal of anchor[0]
+        self._anchor0_pt = None  # (x, y, z) world-space position of anchor[0]
         self._force_parallel = False
         self._anchor0_parallel_dir = None  # (tx, ty, tz) cross(face_normal, camera_dir)
         self._snap_mode = "FACE"
         self._ifc_snap_candidate = None
         self._draw_handler = None
-        self._snap_cand_obj_ptr: int = -1   # Blender object pointer for cached snap cands
-        self._snap_cand_cache: list = []    # cached get_layer/profile_snap_candidates result
+        self._snap_cand_obj_ptr: int = -1  # Blender object pointer for cached snap cands
+        self._snap_cand_cache: list = []  # cached get_layer/profile_snap_candidates result
         self._snap_cand_multi_cache: dict = {}  # ptr → candidates for coplanar-edge nearby objects
 
     # ------------------------------------------------------------------
@@ -5759,13 +5762,17 @@ class DrawParametricDimension(bpy.types.Operator, PolylineOperator, tool.Ifc.Ope
             placement_override = {element.id(): np.array(obj.matrix_world)}
 
             return drawing_api.build_anchor_from_hit(
-                tool.Ifc.get(), element, hit_m, normal_m,
+                tool.Ifc.get(),
+                element,
+                hit_m,
+                normal_m,
                 shape_cache=self._shape_cache,
                 placement_override=placement_override,
             )
 
         # Axis / plane snap, or non-IFC object: store a free world point.
         import ifcopenshell.api.drawing as drawing_api
+
         return drawing_api.make_world_anchor([float(pt_world.x), float(pt_world.y), float(pt_world.z)])
 
     # ------------------------------------------------------------------
@@ -5778,11 +5785,7 @@ class DrawParametricDimension(bpy.types.Operator, PolylineOperator, tool.Ifc.Ope
 
         # Capture snap state BEFORE super() so we have it even if event processing clears it.
         snap = self.snapping_points[0] if self.snapping_points else None
-        is_mouse_click = (
-            not self.tool_state.is_input_on
-            and event.value == "RELEASE"
-            and event.type == "LEFTMOUSE"
-        )
+        is_mouse_click = not self.tool_state.is_input_on and event.value == "RELEASE" and event.type == "LEFTMOUSE"
 
         super().handle_inserting_polyline(context, event)
 
@@ -5799,6 +5802,7 @@ class DrawParametricDimension(bpy.types.Operator, PolylineOperator, tool.Ifc.Ope
             else:
                 # Keyboard-typed coordinate or close-loop: world anchor at the stored point.
                 import ifcopenshell.api.drawing as drawing_api
+
                 pt = polyline_data[0].polyline_points[-1]
                 self._anchors.append(drawing_api.make_world_anchor([float(pt.x), float(pt.y), float(pt.z)]))
 
@@ -5823,7 +5827,9 @@ class DrawParametricDimension(bpy.types.Operator, PolylineOperator, tool.Ifc.Ope
     def _update_perp_constraint(self) -> None:
         """Extract the face normal from anchor[0] and store it as the constraint axis."""
         import math
+
         from mathutils import Vector
+
         a = self._anchors[0] if self._anchors else None
         if not a or a.get("type") != "FACE":
             return
@@ -5843,6 +5849,7 @@ class DrawParametricDimension(bpy.types.Operator, PolylineOperator, tool.Ifc.Ope
                 file = tool.Ifc.get()
                 element = file.by_guid(guid)
                 import ifcopenshell.util.element as _ifc_elem
+
                 usage = _ifc_elem.get_material(element, should_inherit=True)
                 if not usage or not usage.is_a("IfcMaterialLayerSetUsage"):
                     return
@@ -5889,7 +5896,7 @@ class DrawParametricDimension(bpy.types.Operator, PolylineOperator, tool.Ifc.Ope
         """Project the current snap point onto the constraint line when active."""
         if not self._force_perpendicular or not self._anchor0_normal or not self._anchor0_pt:
             return
-        if not self._anchors:   # constraint not yet active (no anchor[0] yet)
+        if not self._anchors:  # constraint not yet active (no anchor[0] yet)
             return
         if not self.snapping_points:
             return
@@ -5909,7 +5916,9 @@ class DrawParametricDimension(bpy.types.Operator, PolylineOperator, tool.Ifc.Ope
     def _update_parallel_constraint(self) -> None:
         """Compute the tangent direction (cross of face normal × camera forward) for anchor[0]."""
         import math
+
         from mathutils import Vector
+
         # Reuse _update_perp_constraint to obtain the face normal first.
         if not self._anchor0_normal:
             self._update_perp_constraint()
@@ -5969,11 +5978,14 @@ class DrawParametricDimension(bpy.types.Operator, PolylineOperator, tool.Ifc.Ope
         if snap_mode == "VERTEX":
             for vert in mesh.vertices:
                 wp = mx @ vert.co
-                candidates.append({
-                    "type": "VERTEX", "snap": "VERTEX",
-                    "snap_world": (wp.x, wp.y, wp.z),
-                    "local_m": (vert.co.x, vert.co.y, vert.co.z),
-                })
+                candidates.append(
+                    {
+                        "type": "VERTEX",
+                        "snap": "VERTEX",
+                        "snap_world": (wp.x, wp.y, wp.z),
+                        "local_m": (vert.co.x, vert.co.y, vert.co.z),
+                    }
+                )
         elif snap_mode == "EDGE":
             for edge in mesh.edges:
                 v0c = mesh.vertices[edge.vertices[0]].co
@@ -5982,13 +5994,16 @@ class DrawParametricDimension(bpy.types.Operator, PolylineOperator, tool.Ifc.Ope
                 v1 = mx @ v1c
                 mid_w = ((v0.x + v1.x) * 0.5, (v0.y + v1.y) * 0.5, (v0.z + v1.z) * 0.5)
                 mid_l = ((v0c.x + v1c.x) * 0.5, (v0c.y + v1c.y) * 0.5, (v0c.z + v1c.z) * 0.5)
-                candidates.append({
-                    "type": "EDGE", "snap": "EDGE",
-                    "snap_world": mid_w,
-                    "local_m": mid_l,
-                    "v0": (v0.x, v0.y, v0.z),
-                    "v1": (v1.x, v1.y, v1.z),
-                })
+                candidates.append(
+                    {
+                        "type": "EDGE",
+                        "snap": "EDGE",
+                        "snap_world": mid_w,
+                        "local_m": mid_l,
+                        "v0": (v0.x, v0.y, v0.z),
+                        "v1": (v1.x, v1.y, v1.z),
+                    }
+                )
         return candidates
 
     @staticmethod
@@ -6006,6 +6021,7 @@ class DrawParametricDimension(bpy.types.Operator, PolylineOperator, tool.Ifc.Ope
         the rear surface of a cut wall.
         """
         from mathutils import Vector
+
         mx = obj.matrix_world
         mesh = obj.data
         hit_pt = Vector(hit_pt_world)
@@ -6027,13 +6043,15 @@ class DrawParametricDimension(bpy.types.Operator, PolylineOperator, tool.Ifc.Ope
             face_center_w = sum(verts_w, Vector((0.0, 0.0, 0.0))) / n
             dist = (hit_pt - face_center_w).dot(normal_w)
             snapped_pt = hit_pt - normal_w * dist
-            candidates.append({
-                "type": "FACE",
-                "snap_world": (snapped_pt.x, snapped_pt.y, snapped_pt.z),
-                "snap": "FACE",
-                "face_verts": [tuple(v) for v in verts_w],
-                "face_normal_world": (normal_w.x, normal_w.y, normal_w.z),
-            })
+            candidates.append(
+                {
+                    "type": "FACE",
+                    "snap_world": (snapped_pt.x, snapped_pt.y, snapped_pt.z),
+                    "snap": "FACE",
+                    "face_verts": [tuple(v) for v in verts_w],
+                    "face_normal_world": (normal_w.x, normal_w.y, normal_w.z),
+                }
+            )
         return candidates
 
     @staticmethod
@@ -6068,8 +6086,8 @@ class DrawParametricDimension(bpy.types.Operator, PolylineOperator, tool.Ifc.Ope
         hit_obj = snap.get("object")
         hit_pt = snap.get("point")
 
-        from bpy_extras.view3d_utils import location_3d_to_region_2d
         import ifcopenshell.api.drawing as drawing_api
+        from bpy_extras.view3d_utils import location_3d_to_region_2d
 
         region = context.region
         rv3d = context.region_data
@@ -6089,6 +6107,7 @@ class DrawParametricDimension(bpy.types.Operator, PolylineOperator, tool.Ifc.Ope
             _cam = bpy.context.scene.camera
             if _cam:
                 from mathutils import Vector as _Vec
+
                 _face_cam_view = (_cam.matrix_world.to_3x3() @ _Vec((0.0, 0.0, -1.0))).normalized()
 
             # snapping_points[0]["point"] can be stale: the previous frame's IFC snap
@@ -6175,7 +6194,9 @@ class DrawParametricDimension(bpy.types.Operator, PolylineOperator, tool.Ifc.Ope
                     if self._snap_mode == "LAYER":
                         self._snap_cand_cache = drawing_api.get_layer_snap_candidates(file, element, placement_override)
                     else:
-                        self._snap_cand_cache = drawing_api.get_profile_snap_candidates(file, element, placement_override)
+                        self._snap_cand_cache = drawing_api.get_profile_snap_candidates(
+                            file, element, placement_override
+                        )
                     self._snap_cand_obj_ptr = obj_ptr
                 all_cands = [(c, element, hit_obj, float("inf")) for c in self._snap_cand_cache]
 
@@ -6217,8 +6238,7 @@ class DrawParametricDimension(bpy.types.Operator, PolylineOperator, tool.Ifc.Ope
                 elif self._snap_mode in ("VERTEX", "EDGE"):
                     # Tessellated element with no IfcExtrudedAreaSolid: fall back to mesh
                     all_cands.extend(
-                        (c, extra_elem, obj, _SCREEN_TOL)
-                        for c in self._get_mesh_snap_candidates(obj, self._snap_mode)
+                        (c, extra_elem, obj, _SCREEN_TOL) for c in self._get_mesh_snap_candidates(obj, self._snap_mode)
                     )
                 extra_count += 1
 
@@ -6269,6 +6289,7 @@ class DrawParametricDimension(bpy.types.Operator, PolylineOperator, tool.Ifc.Ope
     def _build_ifc_anchor(self, candidate: dict) -> dict:
         """Build the correct anchor type from an IFC snap candidate."""
         import ifcopenshell.api.drawing as drawing_api
+
         element = candidate.get("element")
         if not element:
             pt = candidate.get("snap_world", (0.0, 0.0, 0.0))
@@ -6300,30 +6321,38 @@ class DrawParametricDimension(bpy.types.Operator, PolylineOperator, tool.Ifc.Ope
         if self._ifc_snap_candidate:
             cand = self._ifc_snap_candidate
             if cand.get("method") == "LAYER_BOUNDARY":
-                _snap_draw_data.update({
-                    "type": "LAYER",
-                    "seam_corners": cand.get("seam_corners", []),
-                    "snap_world": cand.get("snap_world"),
-                })
+                _snap_draw_data.update(
+                    {
+                        "type": "LAYER",
+                        "seam_corners": cand.get("seam_corners", []),
+                        "snap_world": cand.get("snap_world"),
+                    }
+                )
             elif cand.get("snap") == "FACE":
                 fv = cand.get("face_verts", [])
-                _snap_draw_data.update({
-                    "type": "FACE",
-                    "face_verts": fv,
-                    "snap_world": cand.get("snap_world"),
-                })
+                _snap_draw_data.update(
+                    {
+                        "type": "FACE",
+                        "face_verts": fv,
+                        "snap_world": cand.get("snap_world"),
+                    }
+                )
             elif cand.get("snap") == "EDGE":
-                _snap_draw_data.update({
-                    "type": "EDGE",
-                    "v0": cand.get("v0"),
-                    "v1": cand.get("v1"),
-                    "snap_world": cand.get("snap_world"),
-                })
+                _snap_draw_data.update(
+                    {
+                        "type": "EDGE",
+                        "v0": cand.get("v0"),
+                        "v1": cand.get("v1"),
+                        "snap_world": cand.get("snap_world"),
+                    }
+                )
             else:
-                _snap_draw_data.update({
-                    "type": "VERTEX",
-                    "snap_world": cand.get("snap_world"),
-                })
+                _snap_draw_data.update(
+                    {
+                        "type": "VERTEX",
+                        "snap_world": cand.get("snap_world"),
+                    }
+                )
             return
 
         # FACE mode: outline the hovered face polygon
@@ -6394,7 +6423,9 @@ class DrawParametricDimension(bpy.types.Operator, PolylineOperator, tool.Ifc.Ope
         )
 
         obj = core.add_annotation(
-            tool.Ifc, tool.Collector, tool.Drawing,
+            tool.Ifc,
+            tool.Collector,
+            tool.Drawing,
             drawing=drawing,
             object_type="DIMENSION",
             relating_type=relating_type,
@@ -6451,7 +6482,8 @@ class DrawParametricDimension(bpy.types.Operator, PolylineOperator, tool.Ifc.Ope
         if _cam:
             _cam_dir_tuple = tuple((bpy.context.scene.camera.matrix_world.to_3x3() @ Vector((0, 0, -1))).normalized())
         resolved_pts = drawing_api.regenerate_dimension(
-            file, annotation,
+            file,
+            annotation,
             shape_cache=getattr(self, "_shape_cache", None),
             placement_override=placement_override,
             camera_dir=_cam_dir_tuple,
@@ -6460,6 +6492,7 @@ class DrawParametricDimension(bpy.types.Operator, PolylineOperator, tool.Ifc.Ope
             _update_blender_curve(annotation, resolved_pts)
 
         from bonsai.bim.module.drawing import handler as _drawing_handler
+
         _drawing_handler.invalidate_dim_index()
 
         bpy.ops.object.select_all(action="DESELECT")
@@ -6497,8 +6530,8 @@ class DrawParametricDimension(bpy.types.Operator, PolylineOperator, tool.Ifc.Ope
                 cur = self._SNAP_MODES.index(self._snap_mode)
                 self._snap_mode = self._SNAP_MODES[(cur + 1) % len(self._SNAP_MODES)]
                 self._ifc_snap_candidate = None
-                self._snap_cand_obj_ptr = -1       # invalidate cache: LAYER vs VERTEX/EDGE differ
-                self._snap_cand_multi_cache = {}   # invalidate nearby-object cache too
+                self._snap_cand_obj_ptr = -1  # invalidate cache: LAYER vs VERTEX/EDGE differ
+                self._snap_cand_multi_cache = {}  # invalidate nearby-object cache too
                 self._set_status(context)
             return {"RUNNING_MODAL"}
 
@@ -6554,6 +6587,7 @@ class DrawParametricDimension(bpy.types.Operator, PolylineOperator, tool.Ifc.Ope
         intersectable and gives correct (x, z) initial hit_pt so snap fires on frame 1.
         """
         from mathutils import Vector
+
         plane_normal = Vector((0, 0, 1))  # default: horizontal plane for plan view
         cam = bpy.context.scene.camera
         if cam:
@@ -6652,7 +6686,6 @@ def _prefer_perp_face_index(
 _snap_draw_data: dict = {}
 
 
-
 def _draw_snap_indicator_global():
     """GPU draw callback (POST_VIEW) — draws face outline, edge, or vertex dot."""
     data = _snap_draw_data
@@ -6660,6 +6693,7 @@ def _draw_snap_indicator_global():
         return
     import gpu
     from gpu_extras.batch import batch_for_shader
+
     try:
         shader = gpu.shader.from_builtin("UNIFORM_COLOR")
         gpu.state.blend_set("ALPHA")
@@ -6738,6 +6772,7 @@ def _draw_anchor_hover_global():
         return
     import gpu
     from gpu_extras.batch import batch_for_shader
+
     try:
         shader = gpu.shader.from_builtin("UNIFORM_COLOR")
         gpu.state.blend_set("ALPHA")
@@ -6827,21 +6862,21 @@ class SetDimensionAnchor(bpy.types.Operator, tool.Ifc.Operator):
 
     _annotation: Optional[ifcopenshell.entity_instance] = None
     _annotation_obj: Optional[bpy.types.Object] = None
-    _phase: str = "PICK_VERTEX"   # "PICK_VERTEX" | "PICK_FACE"
+    _phase: str = "PICK_VERTEX"  # "PICK_VERTEX" | "PICK_FACE"
     _active_vertex_idx: int = -1
     _shape_cache: dict
     _region: Optional[bpy.types.Region] = None
     _rv3d: Optional[bpy.types.RegionView3D] = None
 
     # Hover-cycle state (active during PICK_FACE phase)
-    _hover_candidates: list   # [(ifc_obj, hit_mesh, hit_mesh_mx, location, normal, face_index), ...]
-    _hover_index: int         # which element candidate is currently highlighted
-    _hover_last_px: tuple     # last cursor pixel position where candidates were computed
+    _hover_candidates: list  # [(ifc_obj, hit_mesh, hit_mesh_mx, location, normal, face_index), ...]
+    _hover_index: int  # which element candidate is currently highlighted
+    _hover_last_px: tuple  # last cursor pixel position where candidates were computed
     _hover_highlighted_obj: Optional[bpy.types.Object]  # object currently selected for highlight
 
     # Snap-mode cycle state (FACE → EDGE → VERTEX, TAB)
-    _snap_mode: str           # "FACE" | "EDGE" | "VERTEX"
-    _draw_handler: object     # SpaceView3D draw handler handle
+    _snap_mode: str  # "FACE" | "EDGE" | "VERTEX"
+    _draw_handler: object  # SpaceView3D draw handler handle
 
     _VERTEX_PICK_RADIUS_PX = 20
     _HOVER_THROTTLE_PX_SQ = 144  # 12 px — enough to feel responsive without per-pixel recompute
@@ -6884,6 +6919,7 @@ class SetDimensionAnchor(bpy.types.Operator, tool.Ifc.Operator):
             self._phase = "PICK_FACE"
             self._active_vertex_idx = self.anchor_index
             from bonsai.bim.module.drawing.gizmos import set_active_anchor
+
             set_active_anchor(self.anchor_index, obj)
         else:
             self._phase = "PICK_VERTEX"
@@ -6931,6 +6967,7 @@ class SetDimensionAnchor(bpy.types.Operator, tool.Ifc.Operator):
                 bpy.types.SpaceView3D.draw_handler_remove(self._draw_handler, "WINDOW")
                 self._draw_handler = None
             from bonsai.bim.module.drawing.gizmos import set_active_anchor
+
             set_active_anchor(-1)
             obj = context.active_object
             if obj:
@@ -6979,6 +7016,7 @@ class SetDimensionAnchor(bpy.types.Operator, tool.Ifc.Operator):
             bpy.types.SpaceView3D.draw_handler_remove(self._draw_handler, "WINDOW")
             self._draw_handler = None
         from bonsai.bim.module.drawing.gizmos import set_active_anchor
+
         set_active_anchor(-1)
         for area in context.screen.areas:
             if area.type == "VIEW_3D":
@@ -6990,9 +7028,7 @@ class SetDimensionAnchor(bpy.types.Operator, tool.Ifc.Operator):
 
     def _set_status(self, context):
         if self._phase == "PICK_VERTEX":
-            context.workspace.status_text_set(
-                "Click a dimension vertex  |  RMB / ESC: Finish"
-            )
+            context.workspace.status_text_set("Click a dimension vertex  |  RMB / ESC: Finish")
         else:
             # In PICK_FACE the hover handler writes a richer status; this is the
             # fallback shown when no candidates have been computed yet.
@@ -7018,7 +7054,7 @@ class SetDimensionAnchor(bpy.types.Operator, tool.Ifc.Operator):
         obj = self._annotation_obj
 
         best_idx = None
-        best_dist_sq = self._VERTEX_PICK_RADIUS_PX ** 2
+        best_dist_sq = self._VERTEX_PICK_RADIUS_PX**2
 
         if obj.data and hasattr(obj.data, "splines"):
             for spline in obj.data.splines:
@@ -7039,13 +7075,13 @@ class SetDimensionAnchor(bpy.types.Operator, tool.Ifc.Operator):
         self._active_vertex_idx = best_idx
         self._phase = "PICK_FACE"
         from bonsai.bim.module.drawing.gizmos import set_active_anchor
+
         set_active_anchor(best_idx, obj)
 
     # ------------------------------------------------------------------
     # Phase 2: pick a face on an IFC element
 
     def _handle_face_pick(self, context, event):
-        from mathutils import Vector
 
         region = self._region
         rv3d = self._rv3d
@@ -7055,9 +7091,7 @@ class SetDimensionAnchor(bpy.types.Operator, tool.Ifc.Operator):
         # ALT+click → free world-point anchor at any mesh surface.
         if event.alt:
             self._clear_hover_highlight(context)
-            origin, direction = self._unproject_coord(
-                (event.mouse_x - region.x, event.mouse_y - region.y)
-            )
+            origin, direction = self._unproject_coord((event.mouse_x - region.x, event.mouse_y - region.y))
             best_dist = float("inf")
             alt_loc = None
             for obj in context.scene.objects:
@@ -7067,9 +7101,7 @@ class SetDimensionAnchor(bpy.types.Operator, tool.Ifc.Operator):
                     mx_inv = obj.matrix_world.inverted()
                 except Exception:
                     continue
-                ok, loc_l, _, _ = obj.ray_cast(
-                    mx_inv @ origin, (mx_inv.to_3x3() @ direction).normalized()
-                )
+                ok, loc_l, _, _ = obj.ray_cast(mx_inv @ origin, (mx_inv.to_3x3() @ direction).normalized())
                 if ok:
                     loc_w = obj.matrix_world @ loc_l
                     d = (loc_w - origin).length
@@ -7078,6 +7110,7 @@ class SetDimensionAnchor(bpy.types.Operator, tool.Ifc.Operator):
                         alt_loc = loc_w
             pt_m = list(alt_loc) if alt_loc else list(origin + direction * 5.0)
             import ifcopenshell.api.drawing as drawing_api
+
             anchor = drawing_api.make_world_anchor(pt_m)
             _do_write_anchor(self._annotation, self._annotation_obj, anchor, self._active_vertex_idx, self._shape_cache)
             self.report({"INFO"}, f"Vertex {self._active_vertex_idx} → free world point")
@@ -7113,6 +7146,7 @@ class SetDimensionAnchor(bpy.types.Operator, tool.Ifc.Operator):
         snap_type = snap.get("type", "FACE")
 
         import ifcopenshell.api.drawing as drawing_api
+
         try:
             if snap_type == "LAYER" and snap.get("method") == "LAYER_BOUNDARY":
                 anchor = drawing_api.build_anchor_from_layer_boundary(file, element, snap)
@@ -7134,12 +7168,16 @@ class SetDimensionAnchor(bpy.types.Operator, tool.Ifc.Operator):
                 hit_m = (float(location.x), float(location.y), float(location.z))
                 normal_m = (float(normal.x), float(normal.y), float(normal.z))
                 anchor = drawing_api.build_anchor_from_hit(
-                    file, element, hit_m, normal_m,
+                    file,
+                    element,
+                    hit_m,
+                    normal_m,
                     shape_cache=self._shape_cache,
                     placement_override=placement_override,
                 )
         except Exception as exc:
             import traceback
+
             traceback.print_exc()
             self.report({"ERROR"}, f"build_anchor failed: {exc}")
             return
@@ -7152,6 +7190,7 @@ class SetDimensionAnchor(bpy.types.Operator, tool.Ifc.Operator):
         ptype = ifcopenshell.util.element.get_predefined_type(self._annotation)
         if ptype in ("SECTION_LEVEL", "PLAN_LEVEL"):
             from mathutils import Vector as _mVector
+
             hit_pt = anchor.get("pt")
             target_z = float(hit_pt[2]) if hit_pt else float(location.z)
             hit_world = _mVector((float(location.x), float(location.y), target_z))
@@ -7212,6 +7251,7 @@ class SetDimensionAnchor(bpy.types.Operator, tool.Ifc.Operator):
         Sorted closest-first for direct hits; by proximity distance for near-misses.
         """
         import math as _math
+
         from mathutils import Vector
 
         origin, direction = self._unproject_coord(coord)
@@ -7247,14 +7287,12 @@ class SetDimensionAnchor(bpy.types.Operator, tool.Ifc.Operator):
         # Scene-BVH pierce-through: O(log N) vs the previous O(N) per-object loop.
         # Each iteration steps past the last hit surface to reach the next object.
         direct: list = []
-        ray_hit_objs: set = set()   # all IFC objects the ray passed through (any face)
+        ray_hit_objs: set = set()  # all IFC objects the ray passed through (any face)
         ray_origin = Vector(origin)
         _EPS = 1e-4
 
         for _ in range(8):
-            result, loc_w, nrm_w, fi, hit_obj_eval, hit_mx = context.scene.ray_cast(
-                depsgraph, ray_origin, direction
-            )
+            result, loc_w, nrm_w, fi, hit_obj_eval, hit_mx = context.scene.ray_cast(depsgraph, ray_origin, direction)
             if not result:
                 break
             ray_origin = loc_w + direction * _EPS
@@ -7267,16 +7305,14 @@ class SetDimensionAnchor(bpy.types.Operator, tool.Ifc.Operator):
                 continue
             if not tool.Ifc.get_entity(ifc_obj):
                 continue
-            ray_hit_objs.add(ifc_obj)   # track even if face is non-perp
+            ray_hit_objs.add(ifc_obj)  # track even if face is non-perp
             mx = ifc_obj.matrix_world
             # In FACE mode use the exact hit face; _prefer_perp_face_index is only
             # needed for VERTEX/EDGE profile snapping.
             if self._snap_mode != "FACE":
                 fi = _prefer_perp_face_index(ifc_obj, loc_w, fi, world_matrix=mx)
             normal = (
-                (mx.to_3x3() @ ifc_obj.data.polygons[fi].normal).normalized()
-                if fi is not None
-                else nrm_w.normalized()
+                (mx.to_3x3() @ ifc_obj.data.polygons[fi].normal).normalized() if fi is not None else nrm_w.normalized()
             )
             if not _face_perp_ok(normal):
                 continue
@@ -7339,7 +7375,11 @@ class SetDimensionAnchor(bpy.types.Operator, tool.Ifc.Operator):
             loc_w = mx @ loc_l
             if self._snap_mode != "FACE":
                 fi = _prefer_perp_face_index(ifc_obj, loc_w, fi, world_matrix=mx)
-            normal = (mx.to_3x3() @ ifc_obj.data.polygons[fi].normal).normalized() if fi is not None else (mx.to_3x3() @ nrm_l).normalized()
+            normal = (
+                (mx.to_3x3() @ ifc_obj.data.polygons[fi].normal).normalized()
+                if fi is not None
+                else (mx.to_3x3() @ nrm_l).normalized()
+            )
             if not _face_perp_ok(normal):
                 continue
             prox.append((perp_dist, ifc_obj, ifc_obj, mx, loc_w, normal, fi))
@@ -7388,6 +7428,7 @@ class SetDimensionAnchor(bpy.types.Operator, tool.Ifc.Operator):
         _anchor_hover_draw_data.clear()
         if sg and self._region and self._rv3d:
             from bpy_extras.view3d_utils import location_3d_to_region_2d
+
             snap_type = sg.get("type")
             _anchor_hover_draw_data["type"] = snap_type
             if snap_type == "FACE":
@@ -7408,8 +7449,7 @@ class SetDimensionAnchor(bpy.types.Operator, tool.Ifc.Operator):
                     _anchor_hover_draw_data["snap_2d"] = tuple(sp) if sp else None
                 corners_3d = sg.get("seam_corners", [])
                 _anchor_hover_draw_data["seam_corners_2d"] = [
-                    tuple(location_3d_to_region_2d(self._region, self._rv3d, c) or (0, 0))
-                    for c in corners_3d
+                    tuple(location_3d_to_region_2d(self._region, self._rv3d, c) or (0, 0)) for c in corners_3d
                 ]
             elif snap_type == "VERTEX":
                 pt = sg.get("snap_world")
@@ -7447,6 +7487,7 @@ class SetDimensionAnchor(bpy.types.Operator, tool.Ifc.Operator):
             bpy.types.SpaceView3D.draw_handler_remove(self._draw_handler, "WINDOW")
             self._draw_handler = None
         from bonsai.bim.module.drawing.gizmos import set_active_anchor
+
         set_active_anchor(-1)
         obj = context.active_object
         if obj:
@@ -7477,9 +7518,9 @@ class SetDimensionAnchor(bpy.types.Operator, tool.Ifc.Operator):
 
         # Collect all coplanar polygon indices
         coplanar = [
-            i for i, p in enumerate(obj.data.polygons)
-            if abs(p.normal.dot(target_n) - 1.0) <= tol_n
-            and abs(p.center.dot(target_n) - target_d) <= tol_d
+            i
+            for i, p in enumerate(obj.data.polygons)
+            if abs(p.normal.dot(target_n) - 1.0) <= tol_n and abs(p.center.dot(target_n) - target_d) <= tol_d
         ]
 
         # Count edge appearances; boundary edges appear exactly once
@@ -7568,6 +7609,7 @@ class SetDimensionAnchor(bpy.types.Operator, tool.Ifc.Operator):
             element = tool.Ifc.get_entity(hit_obj)
             if element:
                 import ifcopenshell.api.drawing as drawing_api
+
                 placement_override = {element.id(): np.array(mx)}
                 candidates = drawing_api.get_profile_snap_candidates(
                     tool.Ifc.get(), element, placement_override=placement_override
@@ -7629,7 +7671,8 @@ class SetDimensionAnchor(bpy.types.Operator, tool.Ifc.Operator):
                 mid_l = ((v0_l.x + v1_l.x) * 0.5, (v0_l.y + v1_l.y) * 0.5, (v0_l.z + v1_l.z) * 0.5)
                 return {
                     "type": "EDGE",
-                    "v0": v0_w, "v1": v1_w,
+                    "v0": v0_w,
+                    "v1": v1_w,
                     "snap_world": mid_w,
                     "local_m": mid_l,
                 }
@@ -7638,6 +7681,7 @@ class SetDimensionAnchor(bpy.types.Operator, tool.Ifc.Operator):
             element = tool.Ifc.get_entity(hit_obj)
             if element:
                 import ifcopenshell.api.drawing as drawing_api
+
                 placement_override = {element.id(): np.array(mx)}
                 candidates = drawing_api.get_layer_snap_candidates(
                     tool.Ifc.get(), element, placement_override=placement_override
@@ -7684,14 +7728,21 @@ def _do_write_anchor(annotation, annotation_obj, new_anchor: dict, vertex_index:
 
         while len(anchors) <= vertex_index:
             idx = len(anchors)
-            if annotation_obj and annotation_obj.data and hasattr(annotation_obj.data, "splines") and annotation_obj.data.splines:
+            if (
+                annotation_obj
+                and annotation_obj.data
+                and hasattr(annotation_obj.data, "splines")
+                and annotation_obj.data.splines
+            ):
                 pts = annotation_obj.data.splines[0].points
                 if idx < len(pts):
                     co = annotation_obj.matrix_world @ pts[idx].co.xyz
                     import ifcopenshell.api.drawing as drawing_api
+
                     anchors.append(drawing_api.make_world_anchor([float(co.x), float(co.y), float(co.z)]))
                     continue
             import ifcopenshell.api.drawing as drawing_api
+
             anchors.append(drawing_api.make_world_anchor([0.0, 0.0, 0.0]))
 
         anchors[vertex_index] = new_anchor
@@ -7708,6 +7759,7 @@ def _do_write_anchor(annotation, annotation_obj, new_anchor: dict, vertex_index:
         ifcopenshell.api.run("pset.edit_pset", file, pset=pset_entity, properties={"Anchors": anchors_json})
 
     from bonsai.bim.module.drawing import handler as _drawing_handler
+
     _drawing_handler.invalidate_dim_index()
 
     placement_override: dict = {}
@@ -7728,6 +7780,7 @@ def _do_write_anchor(annotation, annotation_obj, new_anchor: dict, vertex_index:
     else:
         import bpy as _bpy
         import ifcopenshell.api.drawing as drawing_api
+
         _cam = _bpy.context.scene.camera
         _cam_dir_tuple = None
         if _cam:
@@ -7751,6 +7804,7 @@ def _do_insert_anchor(annotation, annotation_obj, insert_after: int, shape_cache
     :returns: Index of the newly inserted anchor.
     """
     import ifcopenshell.api.drawing as drawing_api
+
     file = tool.Ifc.get()
 
     pset_data = ifcopenshell.util.element.get_pset(annotation, "BBIM_Dimension")
@@ -7807,6 +7861,7 @@ def _do_insert_anchor(annotation, annotation_obj, insert_after: int, shape_cache
         ifcopenshell.api.run("pset.edit_pset", file, pset=pset_entity, properties={"Anchors": anchors_json})
 
     from bonsai.bim.module.drawing import handler as _drawing_handler
+
     _drawing_handler.invalidate_dim_index()
 
     placement_override: dict = {}
@@ -7823,6 +7878,7 @@ def _do_insert_anchor(annotation, annotation_obj, insert_after: int, shape_cache
             pass
 
     import bpy as _bpy
+
     _cam = _bpy.context.scene.camera
     _cam_dir_tuple = None
     if _cam:
@@ -7973,6 +8029,7 @@ class AddElevationAnnotation(SetDimensionAnchor):
         snap_type = snap.get("type", "FACE")
 
         import ifcopenshell.api.drawing as drawing_api
+
         try:
             if snap_type == "LAYER" and snap.get("method") == "LAYER_BOUNDARY":
                 anchor = drawing_api.build_anchor_from_layer_boundary(file, element, snap)
@@ -7991,18 +8048,24 @@ class AddElevationAnnotation(SetDimensionAnchor):
                 hit_m = (float(location.x), float(location.y), float(location.z))
                 normal_m = (float(normal.x), float(normal.y), float(normal.z))
                 anchor = drawing_api.build_anchor_from_hit(
-                    file, element, hit_m, normal_m,
+                    file,
+                    element,
+                    hit_m,
+                    normal_m,
                     shape_cache=self._shape_cache,
                     placement_override=placement_override,
                 )
         except Exception as exc:
             import traceback as _tb
+
             _tb.print_exc()
             self.report({"ERROR"}, f"build_anchor failed: {exc}")
             return False
 
         obj = core.add_annotation(
-            tool.Ifc, tool.Collector, tool.Drawing,
+            tool.Ifc,
+            tool.Collector,
+            tool.Drawing,
             drawing=self._create_drawing,
             object_type=self._create_object_type,
             relating_type=self._create_relating_type,
@@ -8020,6 +8083,7 @@ class AddElevationAnnotation(SetDimensionAnchor):
         # obj.matrix_world may be stale (depsgraph not yet evaluated), so we
         # override the translation column directly from the known hit point.
         from mathutils import Vector as _mVector
+
         hit_pt = anchor.get("pt")
         target_z = float(hit_pt[2]) if hit_pt else float(location.z)
         hit_world = _mVector((float(location.x), float(location.y), target_z))
@@ -8098,8 +8162,7 @@ class RegenerateDimensions(bpy.types.Operator, tool.Ifc.Operator):
             candidates = [element]
         else:
             candidates = [
-                a for a in file.by_type("IfcAnnotation")
-                if ifcopenshell.util.element.get_pset(a, "BBIM_Dimension")
+                a for a in file.by_type("IfcAnnotation") if ifcopenshell.util.element.get_pset(a, "BBIM_Dimension")
             ]
 
         from bonsai.bim.module.drawing.handler import _sync_dimension_anchors_to_curve
@@ -8129,7 +8192,7 @@ class RegenerateDimensions(bpy.types.Operator, tool.Ifc.Operator):
             # file when the user explicitly clicks "Edit Object Placement" — so the
             # IFC entity may be stale after a viewport G-move.  Using matrix_world
             # ensures we always see the current element position.
-            placement_override: dict[int, "np.ndarray"] = {}
+            placement_override: dict[int, np.ndarray] = {}
             try:
                 anchors_raw = json.loads(pset.get("Anchors") or "[]")
                 for anchor in anchors_raw:
@@ -8151,7 +8214,8 @@ class RegenerateDimensions(bpy.types.Operator, tool.Ifc.Operator):
 
             if _is_elevation:
                 if _update_elevation_marker_z(
-                    file, annotation,
+                    file,
+                    annotation,
                     settings=geom_settings,
                     shape_cache=shape_cache,
                     placement_override=placement_override,
@@ -8159,7 +8223,8 @@ class RegenerateDimensions(bpy.types.Operator, tool.Ifc.Operator):
                     updated += 1
             else:
                 resolved_pts = drawing_api.regenerate_dimension(
-                    file, annotation,
+                    file,
+                    annotation,
                     settings=geom_settings,
                     shape_cache=shape_cache,
                     placement_override=placement_override,
@@ -8275,9 +8340,10 @@ def _update_elevation_marker_z(
     drawn shape intact while tracking the anchored element's elevation.
     Returns True if the spline was updated.
     """
-    from ifcopenshell.api.drawing.resolve_anchor import resolve_anchor as _resolve_anchor
-    import ifcopenshell.api.pset as _pset_api
     import json as _json
+
+    import ifcopenshell.api.pset as _pset_api
+    from ifcopenshell.api.drawing.resolve_anchor import resolve_anchor as _resolve_anchor
 
     pset_data = ifcopenshell.util.element.get_pset(annotation, "BBIM_Dimension")
     if not pset_data or not pset_data.get("Anchors"):
@@ -8313,6 +8379,7 @@ def _update_elevation_marker_z(
     if is_2d:
         # 2D annotations encode elevation in the object placement (world Z), not curve points.
         from mathutils import Vector as _Vector
+
         current_world = obj.matrix_world.to_translation()
         new_world = _Vector((current_world.x, current_world.y, target_z))
         # Build updated world matrix (replace Z translation only, preserve rotation/scale)
@@ -8330,6 +8397,7 @@ def _update_elevation_marker_z(
         return True
 
     from mathutils import Vector as _Vector
+
     mx = obj.matrix_world
     inv_mx = mx.inverted()
 
@@ -8434,8 +8502,7 @@ def _update_ifc_polyline(
             else:
                 dim = len(existing[0].Coordinates) if existing else 3
                 curve.Points = [
-                    file.create_entity("IfcCartesianPoint", Coordinates=coords[:dim])
-                    for coords in new_coords
+                    file.create_entity("IfcCartesianPoint", Coordinates=coords[:dim]) for coords in new_coords
                 ]
             return
 
@@ -8491,8 +8558,6 @@ def _find_curve_in_item(item: ifcopenshell.entity_instance) -> Optional[ifcopens
     return None
 
 
-
-
 class DriveDimensionLength(bpy.types.Operator, tool.Ifc.Operator):
     """Set the length of one segment of a parametric dimension by moving one end's element.
 
@@ -8536,12 +8601,14 @@ class DriveDimensionLength(bpy.types.Operator, tool.Ifc.Operator):
         pt_b = anchors[self.segment_index + 1].get("pt")
         if pt_a and pt_b:
             import math as _math
+
             dx, dy, dz = pt_b[0] - pt_a[0], pt_b[1] - pt_a[1], pt_b[2] - pt_a[2]
             self.target_length = _math.sqrt(dx * dx + dy * dy + dz * dz)
         return context.window_manager.invoke_props_dialog(self)
 
     def _execute(self, context):
         from mathutils import Vector
+
         obj = context.active_object
         if not obj:
             return {"CANCELLED"}
@@ -8615,12 +8682,14 @@ class DriveDimensionLength(bpy.types.Operator, tool.Ifc.Operator):
                 pass
 
         import ifcopenshell.api.drawing as drawing_api
+
         _cam = bpy.context.scene.camera
         _cam_dir = None
         if _cam:
             _cam_dir = tuple((_cam.matrix_world.to_3x3() @ Vector((0, 0, -1))).normalized())
         resolved_pts = drawing_api.regenerate_dimension(
-            file, annotation,
+            file,
+            annotation,
             placement_override=placement_override,
             camera_dir=_cam_dir,
         )
@@ -8692,9 +8761,11 @@ class RemoveDimensionAnchor(bpy.types.Operator, tool.Ifc.Operator):
         ifcopenshell.api.run("pset.edit_pset", file, pset=pset_entity, properties={"Anchors": json.dumps(anchors)})
 
         from bonsai.bim.module.drawing import handler as _drawing_handler
+
         _drawing_handler.invalidate_dim_index()
 
         from bonsai.bim.module.drawing.gizmos import set_active_anchor
+
         set_active_anchor(-1)
 
         placement_override: dict = {}
@@ -8711,6 +8782,7 @@ class RemoveDimensionAnchor(bpy.types.Operator, tool.Ifc.Operator):
                 pass
 
         import ifcopenshell.api.drawing as drawing_api
+
         _cam = context.scene.camera
         _cam_dir_tuple = None
         if _cam:
@@ -8770,6 +8842,7 @@ class InsertDimensionAnchor(bpy.types.Operator, tool.Ifc.Operator):
         new_idx = _do_insert_anchor(annotation, obj, self.insert_after)
 
         from bonsai.bim.module.drawing.gizmos import set_active_anchor
+
         set_active_anchor(new_idx, obj)
 
         for area in context.screen.areas:
@@ -8836,7 +8909,7 @@ class ClickNearestDimensionAnchor(bpy.types.Operator):
 
         import ifcopenshell.util.element as _ue
 
-        r2 = self.RADIUS_PX ** 2
+        r2 = self.RADIUS_PX**2
         best_obj = None
         best_idx = -1
         best_dist_sq = float("inf")
@@ -8902,7 +8975,7 @@ class ClickNearestDimensionAnchor(bpy.types.Operator):
                     seg_len_sq = seg_dx * seg_dx + seg_dy * seg_dy
                     if seg_len_sq < 1e-6:
                         continue
-                    seg_len = seg_len_sq ** 0.5
+                    seg_len = seg_len_sq**0.5
                     # Parametric projection of cursor onto segment (0=sp_a, 1=sp_b).
                     t = ((cx - sp_a.x) * seg_dx + (cy - sp_a.y) * seg_dy) / seg_len_sq
                     # Exclude the dot zones at each end.
@@ -8977,6 +9050,7 @@ class ClickNearestDimensionAnchor(bpy.types.Operator):
             else:
                 # Plain click on a dot → re-anchor (existing behaviour).
                 from bonsai.bim.module.drawing.gizmos import set_active_anchor
+
                 set_active_anchor(self._best_idx, self._best_obj)
                 for area in context.screen.areas:
                     if area.type == "VIEW_3D":
@@ -9050,10 +9124,7 @@ class MakeDimensionParametric(bpy.types.Operator, tool.Ifc.Operator):
             anchors = [drawing_api.make_world_anchor(world_pos)]
         else:
             spline = obj.data.splines[0]
-            anchors = [
-                drawing_api.make_world_anchor(list(obj.matrix_world @ pt.co.to_3d()))
-                for pt in spline.points
-            ]
+            anchors = [drawing_api.make_world_anchor(list(obj.matrix_world @ pt.co.to_3d())) for pt in spline.points]
 
         pset_data = ifcopenshell.util.element.get_pset(element, "BBIM_Dimension")
         if not pset_data:
@@ -9063,6 +9134,7 @@ class MakeDimensionParametric(bpy.types.Operator, tool.Ifc.Operator):
         ifcopenshell.api.run("pset.edit_pset", file, pset=pset_entity, properties={"Anchors": json.dumps(anchors)})
 
         from bonsai.bim.module.drawing import handler as _drawing_handler
+
         _drawing_handler.invalidate_dim_index()
 
         for area in context.screen.areas:
@@ -9114,6 +9186,7 @@ class BakeParametricDimension(bpy.types.Operator, tool.Ifc.Operator):
         ifcopenshell.api.pset.remove_pset(file, product=element, pset=pset_entity)
 
         from bonsai.bim.module.drawing import handler as _drawing_handler
+
         _drawing_handler.invalidate_dim_index()
 
         for area in context.screen.areas:
