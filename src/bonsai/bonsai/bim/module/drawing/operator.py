@@ -1901,7 +1901,7 @@ class AddAnnotation(bpy.types.Operator, tool.Ifc.Operator):
             # ELEVATION/SECTION annotations use simple empty/line geometry that
             # cannot be tessellated by the IFC geometry engine, so skip IFC
             # item edit mode for these types.
-            enable_editing=object_type not in ("ELEVATION", "SECTION"),
+            enable_editing=props.object_type not in ("ELEVATION", "SECTION"),
         )
         if props.object_type == "IMAGE":
             bpy.ops.bim.add_reference_image("INVOKE_DEFAULT", existing_object_by_name=obj.name)
@@ -6506,6 +6506,22 @@ class DrawParametricDimension(bpy.types.Operator, PolylineOperator, tool.Ifc.Ope
         return IfcStore.execute_ifc_operator(self, context, event, method="MODAL")
 
     def _modal(self, context, event):
+        # Any exception raised below (e.g. from the snap-candidate computation on
+        # a MOUSEMOVE) would otherwise abort the modal loop while leaving the
+        # PolylineDecorator draw handler installed and insertion_polyline populated.
+        # Those are shared with every other PolylineOperator-based tool (walls,
+        # other annotation types), so a crash here would corrupt the next
+        # unrelated line/polyline draw. Guarantee cleanup on any failure.
+        try:
+            return self._modal_unsafe(context, event)
+        except Exception:
+            self.tool_state.plane_method = None
+            PolylineDecorator.uninstall()
+            tool.Polyline.clear_polyline()
+            self._cleanup(context)
+            raise
+
+    def _modal_unsafe(self, context, event):
         PolylineDecorator.update(event, self.tool_state, self.input_ui, self.snapping_points[0])
         tool.Blender.update_viewport()
 
