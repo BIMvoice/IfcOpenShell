@@ -205,7 +205,9 @@ ifcopenshell::geom::native_element* ifcopenshell::geom::converter::create_brep_f
 			logger_.message(ifcopenshell::logger::LOG_ERROR, "GEO", 33, std::string("Error processing openings for: ") + e.what() + ":", product);
 			caught_error = true;
 		} catch (...) {
+			// Non-std::exception (e.g. OCCT's Standard_Failure) also counts as caught_error.
 			logger_.message(ifcopenshell::logger::LOG_ERROR, "GEO", 34, "Error processing openings for:", product);
+			caught_error = true;
 		}
 
 		if (!(caught_error && opened_shapes.size() < shapes.size())) {
