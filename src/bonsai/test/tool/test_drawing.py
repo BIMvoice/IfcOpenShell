@@ -423,6 +423,41 @@ class TestExportTextLiteralAttributes(NewFile):
         ]
 
 
+class TestAddDimensionTextAnnotation(NewFile):
+    def add_dimension(self, description: str) -> bpy.types.Object:
+        bpy.ops.bim.create_project()
+        tool.Project.save_test_project()
+        props = tool.Drawing.get_document_props()
+        bpy.ops.bim.load_drawings()
+        bpy.ops.bim.add_drawing()
+        drawing = tool.Ifc.get().by_type("IfcAnnotation")[0]
+        for i, d in enumerate(props.drawings):
+            if d.ifc_definition_id == drawing.id():
+                props.active_drawing_index = i
+        bpy.ops.bim.activate_drawing(drawing=drawing.id())
+        tool.Drawing.get_annotation_props().object_type = "DIMENSION"
+        bpy.ops.bim.add_annotation()
+        dimension = next(a for a in tool.Ifc.get().by_type("IfcAnnotation") if a.ObjectType == "DIMENSION")
+        dimension.Description = description
+        return tool.Ifc.get_object(dimension)
+
+    def test_creates_a_text_annotation_assigned_to_the_dimension(self):
+        dimension_obj = self.add_dimension("MIN CLEAR")
+        dimension = tool.Ifc.get_entity(dimension_obj)
+
+        bpy.context.view_layer.objects.active = dimension_obj
+        bpy.ops.bim.add_dimension_text_annotation()
+
+        text_annotations = tool.Drawing.get_dimension_text_annotations(dimension)
+        assert len(text_annotations) == 1
+        text = text_annotations[0]
+        assert text.ObjectType == "TEXT"
+        assert text != dimension
+        (rel,) = [r for r in text.HasAssignments if r.is_a("IfcRelAssignsToProduct")]
+        assert rel.RelatingProduct == dimension
+        assert tool.Drawing.get_text_literal(tool.Ifc.get_object(text)).Literal == "MIN CLEAR"
+
+
 class TestGetAnnotationContext(NewFile):
     def test_run(self):
         ifc = ifcopenshell.file()
