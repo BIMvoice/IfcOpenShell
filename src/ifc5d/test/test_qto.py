@@ -191,6 +191,37 @@ class TestEditQtos:
         assert quantity.LengthValue == pytest.approx(5000.0)
 
 
+class TestSlabQuantities:
+    @pytest.mark.parametrize("schema", ["IFC4", "IFC4X3"])
+    def test_width_is_the_thickness_and_depth_is_a_footprint_direction(self, schema):
+        f = ifcopenshell.file(schema=schema)
+        ifcopenshell.api.root.create_entity(f, ifc_class="IfcProject", name="Test")
+        ifcopenshell.api.unit.assign_unit(f)
+        model = ifcopenshell.api.context.add_context(f, context_type="Model")
+        body = ifcopenshell.api.context.add_context(
+            f, context_type="Model", context_identifier="Body", target_view="MODEL_VIEW", parent=model
+        )
+        slab = ifcopenshell.api.root.create_entity(f, ifc_class="IfcSlab")
+        slab.ObjectPlacement = f.createIfcLocalPlacement(
+            None, f.createIfcAxis2Placement3D(f.createIfcCartesianPoint((0.0, 0.0, 0.0)), None, None)
+        )
+        profile = f.createIfcRectangleProfileDef("AREA", None, None, 5.0, 3.0)
+        solid = f.createIfcExtrudedAreaSolid(
+            profile,
+            f.createIfcAxis2Placement3D(f.createIfcCartesianPoint((0.0, 0.0, 0.0)), None, None),
+            f.createIfcDirection((0.0, 0.0, 1.0)),
+            0.2,
+        )
+        rep = f.createIfcShapeRepresentation(body, "Body", "SweptSolid", [solid])
+        slab.Representation = f.createIfcProductDefinitionShape(None, None, [rep])
+
+        rules = ifc5d.qto.rules[f"{schema}QtoBaseQuantities"]
+        quantities = ifc5d.qto.quantify(f, {slab}, rules)[slab]["Qto_SlabBaseQuantities"]
+        assert quantities["Length"] == pytest.approx(5.0)
+        assert quantities["Depth"] == pytest.approx(3.0)
+        assert quantities["Width"] == pytest.approx(0.2)
+
+
 class TestEditQtosIntegration:
     """A real quantify() + edit_qtos() round trip, guarding against edit_qto's own
     class-inference disagreeing with get_quantity_measures()'s notion of measure.
