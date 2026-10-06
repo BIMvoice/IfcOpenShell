@@ -146,6 +146,8 @@ class EarlyBoundCodeWriter:
             "",
             '#include "../../ifcparse/schema.h"',
             '#include "../../ifcparse/schemas/%(schema_name_title)s.h"' % self.__dict__,
+            "",
+            "#include <atomic>",
             "#include <string>",
             "",
             "using namespace std::string_literals;",
@@ -324,8 +326,11 @@ class EarlyBoundCodeWriter:
         self.statements.extend(
             (
                 "static std::unique_ptr<schema_definition> schema;",
+                "static std::atomic<bool> schema_populated(false);",
                 "",
                 "void %s::clear_schema() {" % schema_name_title,
+                "    auto lock = schema_registry_instance().lock();",
+                "    schema_populated = false;",
                 "    schema.reset();",
                 "}",
                 "",
@@ -335,8 +340,12 @@ class EarlyBoundCodeWriter:
         self.statements.extend(
             (
                 "const schema_definition& %s::get_schema() {" % schema_name_title,
-                "    if (!schema) {",
-                "        schema.reset(%(schema_name)s_populate_schema());" % locals(),
+                "    if (!schema_populated) {",
+                "        auto lock = schema_registry_instance().lock();",
+                "        if (!schema) {",
+                "            schema.reset(%(schema_name)s_populate_schema());" % locals(),
+                "        }",
+                "        schema_populated = true;",
                 "    }",
                 "    return *schema;",
                 "}",

@@ -4,11 +4,14 @@
 #include <ifcparse/exception.h>
 #include <ifcparse/file.h>
 #include <ifcparse/parse.h>
+#include <ifcparse/schemas/Header_section_schema.h>
+#include <atomic>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 TEST_CASE("SPF strings can be encoded and decoded", "[ifcparse]") {
@@ -49,6 +52,29 @@ TEST_CASE("Bypassed entity types include their subtypes", "[ifcparse]") {
     REQUIRE(file.initialize(fixture));
     CHECK(file.instances_by_type("IfcRepresentationItem").empty());
     CHECK(file.instances_by_type("IfcCartesianPoint").empty());
+}
+
+TEST_CASE("Threads that request the header schema at the same time get one schema", "[ifcparse]") {
+    for (int round = 0; round < 200; ++round) {
+        Header_section_schema::clear_schema();
+        std::atomic<bool> start(false);
+        std::vector<const ifcopenshell::schema_definition*> schemas(8, nullptr);
+        std::vector<std::thread> threads;
+        for (auto& schema : schemas) {
+            threads.emplace_back([&start, &schema]() {
+                while (!start) {
+                }
+                schema = &Header_section_schema::get_schema();
+            });
+        }
+        start = true;
+        for (auto& thread : threads) {
+            thread.join();
+        }
+        for (const auto* schema : schemas) {
+            REQUIRE(schema == schemas.front());
+        }
+    }
 }
 
 TEST_CASE("Aggregate inverse updates preserve reference multiplicity", "[ifcparse]") {

@@ -514,6 +514,8 @@ class IFC_PARSE_API schema_registry {
     const schema_definition* get(const std::string& schema_name);
     std::vector<std::string> names();
     void clear();
+    // Serialises lazy schema construction with get(), which constructs under the same lock.
+    std::unique_lock<std::recursive_mutex> lock() { return std::unique_lock<std::recursive_mutex>(mutex_); }
 
   private:
     struct entry {

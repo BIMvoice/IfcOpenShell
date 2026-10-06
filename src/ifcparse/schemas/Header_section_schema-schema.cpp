@@ -26,6 +26,8 @@
 
 #include "../../ifcparse/schema.h"
 #include "../../ifcparse/schemas/Header_section_schema.h"
+
+#include <atomic>
 #include <string>
 
 using namespace std::string_literals;
@@ -47,14 +49,21 @@ const std::string strings[] = {"schema_name"s,"time_stamp_text"s,"file_descripti
     return new schema_definition(strings[15], {HEADER_SECTION_SCHEMA_types[0],HEADER_SECTION_SCHEMA_types[1],HEADER_SECTION_SCHEMA_types[2],HEADER_SECTION_SCHEMA_types[3],HEADER_SECTION_SCHEMA_types[4]});
 }
 static std::unique_ptr<schema_definition> schema;
+static std::atomic<bool> schema_populated(false);
 
 void Header_section_schema::clear_schema() {
+    auto lock = schema_registry_instance().lock();
+    schema_populated = false;
     schema.reset();
 }
 
 const schema_definition& Header_section_schema::get_schema() {
-    if (!schema) {
-        schema.reset(HEADER_SECTION_SCHEMA_populate_schema());
+    if (!schema_populated) {
+        auto lock = schema_registry_instance().lock();
+        if (!schema) {
+            schema.reset(HEADER_SECTION_SCHEMA_populate_schema());
+        }
+        schema_populated = true;
     }
     return *schema;
 }
