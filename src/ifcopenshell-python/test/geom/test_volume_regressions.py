@@ -65,6 +65,30 @@ def test_advanced_brep_through_hole_volume_9570(deflection):
     assert ifcopenshell.util.shape.get_volume(shape.geometry) == pytest.approx(expected, rel=0.005)
 
 
+def test_profile_with_collinear_self_intersection_volume_6287():
+    model = ifcopenshell.file(schema="IFC4")
+    placement = model.createIfcAxis2Placement3D(model.createIfcCartesianPoint((0.0, 0.0, 0.0)))
+    context = model.createIfcGeometricRepresentationContext(None, "Model", 3, 1e-5, placement, None)
+    units = model.createIfcUnitAssignment([model.createIfcSIUnit(None, "LENGTHUNIT", None, "METRE")])
+    model.createIfcProject(ifcopenshell.guid.new(), None, "Test", None, None, None, None, [context], units)
+    two_unit_squares = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0), (0.0, 3.0), (1.0, 3.0), (1.0, 2.0), (0.0, 2.0)]
+    points = [model.createIfcCartesianPoint(p) for p in two_unit_squares]
+    profile = model.createIfcArbitraryClosedProfileDef("AREA", None, model.createIfcPolyline(points + points[:1]))
+    solid = model.createIfcExtrudedAreaSolid(profile, placement, model.createIfcDirection((0.0, 0.0, 1.0)), 1.0)
+    representation = model.createIfcShapeRepresentation(context, "Body", "SweptSolid", [solid])
+    product = model.createIfcBuildingElementProxy(
+        ifcopenshell.guid.new(),
+        None,
+        "Openings",
+        None,
+        None,
+        model.createIfcLocalPlacement(None, placement),
+        model.createIfcProductDefinitionShape(None, None, [representation]),
+    )
+    shape = ifcopenshell.geom.create_shape(ifcopenshell.geom.settings(), product, geometry_library="opencascade")
+    assert ifcopenshell.util.shape.get_volume(shape.geometry) == pytest.approx(2.0, rel=1e-6)
+
+
 @pytest.mark.parametrize("axis_first", [True, False], ids=["axis_first", "body_first"])
 def test_create_shape_prefers_body_over_axis_9771(axis_first):
     model = ifcopenshell.api.project.create_file(version="IFC4")
