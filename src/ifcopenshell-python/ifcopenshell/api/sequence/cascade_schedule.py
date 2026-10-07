@@ -134,6 +134,8 @@ class Usecase:
             raise RecursionError("Recursive tasks found. Could not cascade schedule.")
 
         if not task.TaskTime:
+            for nested_task in ifcopenshell.util.sequence.get_nested_tasks(task):
+                self.cascade_task(nested_task, task_sequence=task_sequence + [task])
             return
 
         duration = (
@@ -313,6 +315,19 @@ class Usecase:
                 ),
                 "IfcDateTime",
             )
+        elif start := self.get_task_time_attribute(task, "ScheduleStart"):
+            duration_type = task.TaskTime.DurationType
+            calendar = self.get_calendar(task)
+            working_start = ifcopenshell.util.sequence.get_soonest_working_day(start, duration_type, calendar)
+            if duration.days:
+                finish = ifcopenshell.util.sequence.get_start_or_finish_date(
+                    working_start, duration, duration_type, calendar, date_type="FINISH"
+                )
+            elif finish := self.get_task_time_attribute(task, "ScheduleFinish"):
+                finish += working_start - start
+            task.TaskTime.ScheduleStart = ifcopenshell.util.date.datetime2ifc(working_start, "IfcDateTime")
+            if finish:
+                task.TaskTime.ScheduleFinish = ifcopenshell.util.date.datetime2ifc(finish, "IfcDateTime")
 
         for rel in task.IsPredecessorTo:
             self.cascade_task(rel.RelatedProcess, task_sequence=task_sequence + [task])
