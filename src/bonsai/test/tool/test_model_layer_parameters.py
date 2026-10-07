@@ -29,13 +29,6 @@ from test.bim.bootstrap import NewFile
 
 
 class TestGetMaterialLayerParameters(NewFile):
-    """https://github.com/IfcOpenShell/IfcOpenShell/issues/5611 : a host with
-    no material (eg. a parametric IfcRoof, which never gets an
-    IfcMaterialLayerSetUsage) used to silently default to AXIS2, the
-    wall convention, so windows/skylights added to it never rotated or cut
-    an opening. The default should follow the host's class instead, the
-    same way ``get_usage_type`` already infers AXIS3 vs AXIS2."""
-
     def test_roof_with_no_material_defaults_to_axis3(self):
         ifc = ifcopenshell.file()
         tool.Ifc.set(ifc)

@@ -18,18 +18,6 @@
 #
 # This file was generated with the assistance of an AI coding tool.
 
-"""Pure-math coverage for ``get_surface_aligned_rotation`` (opening.py).
-
-https://github.com/IfcOpenShell/IfcOpenShell/issues/5611 : a window/skylight
-added to a parametric IfcRoof came out vertical with no opening cut, because
-the AXIS3 branch that places slab/roof fillings assumed a flat top face
-(host's own world rotation, twisted -90 degrees around X) instead of reading
-the actual (possibly sloped, per-face) surface normal. These tests pin the
-replacement helper against that old formula so a flat or
-whole-object-tilted host keeps behaving identically, and confirm a per-face
-sloped normal (the roof case) rotates the filling to match the slope.
-"""
-
 import math
 
 import pytest
@@ -41,9 +29,6 @@ pytestmark = pytest.mark.model
 
 
 def _old_flat_slab_rotation(voided_obj_matrix_world: Matrix) -> Matrix:
-    """The formula this helper generalises, kept here only so the
-    "no regression on flat / tilted-whole-object hosts" tests can pin
-    against it without re-deriving it."""
     return voided_obj_matrix_world.to_3x3().to_4x4() @ Matrix.Rotation(math.radians(-90), 4, "X")
 
 
@@ -65,13 +50,6 @@ class TestFlatHost:
 
 
 class TestTiltedWholeObjectHost:
-    """ "Horizontal Layers" roofs / lean-to slabs: a single flat local mesh
-    (local normal +Z) with the whole object rotated to the slope. The old
-    formula (host rotation, then twist -90 around X) and the new
-    normal-based one must still agree exactly, *for tilts where the old
-    formula's height axis already pointed uphill* (see
-    ``TestNegativeTiltIsUphillCorrected`` below for the other case)."""
-
     @pytest.mark.parametrize("angle_degrees", [10, 30, 45])
     def test_matches_old_formula_for_various_tilts(self, angle_degrees):
         host_matrix = Matrix.Rotation(math.radians(angle_degrees), 4, "X")
@@ -80,18 +58,6 @@ class TestTiltedWholeObjectHost:
 
 
 class TestNegativeTiltIsUphillCorrected:
-    """A slab/roof can be tilted either way via ``x_angle`` (see
-    ``obj.matrix_world = obj.matrix_world @ Matrix.Rotation(x_angle, 4, "X")``
-    in slab.py), and both signs are legitimate, real authoring input.
-
-    The old formula's height axis was whatever the host's own local Y
-    rotated to, which pointed downhill (below horizontal) for negative
-    tilts: an existing, if minor, wrong-way-round quirk. The new formula
-    always keeps the height axis pointing uphill by construction, so it
-    intentionally does NOT reproduce the old formula bit-for-bit here. This
-    only changes the filling's in-plane roll (still flush, still cut); it
-    does not reintroduce the reported bug of no rotation / no cut."""
-
     def test_height_axis_always_points_uphill_regardless_of_tilt_sign(self):
         world_up = Vector((0.0, 0.0, 1.0))
         for angle_degrees in (10, 30, 45, -10, -30, -45):
@@ -101,7 +67,6 @@ class TestNegativeTiltIsUphillCorrected:
             assert height_axis_world.dot(world_up) >= -1e-9
 
     def test_old_formula_pointed_downhill_for_a_negative_tilt(self):
-        """Documents the old quirk being fixed, not a property of the new code."""
         world_up = Vector((0.0, 0.0, 1.0))
         host_matrix = Matrix.Rotation(math.radians(-20), 4, "X")
         old_height_axis_world = _old_flat_slab_rotation(host_matrix).to_3x3() @ Vector((0.0, 0.0, 1.0))
@@ -109,9 +74,6 @@ class TestNegativeTiltIsUphillCorrected:
 
 
 class TestSlopedRoofFace:
-    """A parametric IfcRoof: the object itself isn't rotated, but individual
-    faces (read from the raycast normal) are sloped."""
-
     def test_thickness_axis_follows_the_face_normal(self):
         identity = Matrix.Identity(4)
         local_normal = Vector((0.0, -0.5, math.sqrt(3) / 2))
