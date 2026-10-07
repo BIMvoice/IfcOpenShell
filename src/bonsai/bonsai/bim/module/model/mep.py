@@ -1728,8 +1728,7 @@ class MEPAddJunction(bpy.types.Operator, tool.Ifc.Operator):
             self.report({"ERROR"}, "All segments should share the same segment type for a junction.")
             return {"CANCELLED"}
 
-        profile = tool.Model.get_flow_segment_profile(elements[0])
-        if not profile:
+        if not (profile := tool.Model.get_flow_segment_profile(elements[0])):
             self.report({"ERROR"}, "Segments have no single profile to build the junction from.")
             return {"CANCELLED"}
 

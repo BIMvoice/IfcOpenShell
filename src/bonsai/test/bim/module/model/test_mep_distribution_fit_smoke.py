@@ -193,9 +193,6 @@ def test_fit_flow_segments_refuses_mixed_pipe_and_duct():
 
 
 def test_mep_add_junction_is_registered():
-    """``MEPAddJunction`` is the 3+ segment junction entry point (tee,
-    wye, cross). Pin the registration contract so the operator stays
-    callable from the workspace tool and ``FitFlowSegments``."""
     from bonsai.bim.module.model import mep
 
     assert mep.MEPAddJunction.bl_idname == "bim.mep_add_junction"
@@ -204,9 +201,6 @@ def test_mep_add_junction_is_registered():
 
 
 def test_fit_flow_segments_with_three_segments_dispatches_junction():
-    """Three same-class, same-profile IfcFlowSegments → JUNCTION fitting
-    type, delegates to ``bim.mep_add_junction`` which validates the
-    common-point geometry and reports its own errors."""
     from bonsai.bim.module.model import mep
 
     objs = [MagicMock(), MagicMock(), MagicMock()]
